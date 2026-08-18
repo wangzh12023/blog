@@ -12,10 +12,9 @@
             {{ with .Site.Menus.main}}
             {{ range sort . }}
             <li class="navigation-item navigation-menu">
-                {{- $label := .Name -}}
-                {{- if eq (strings.TrimSuffix "/" .URL) "/archives" -}}
-                    {{- $label = "Archive" -}}
-                {{- end -}}
+                {{- $menuPath := strings.TrimSuffix "/" .URL -}}
+                {{- $menuLabels := dict "/blog" "文章" "/art" "随笔" "/tags" "分类" "/archives" "Archive" -}}
+                {{- $label := index $menuLabels $menuPath | default .Name -}}
                 <a class="navigation-link" href="{{ index (apply (slice .URL) (.Params.urlFunc | default "relLangURL") ".") 0 }}">{{ $label }}</a>
             </li>
             {{ end }}
