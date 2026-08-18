@@ -10,6 +10,14 @@ enableRobotsTXT: true
 paginate: 10
 hasCJKLanguage: true
 copyright: "2026 WZH All rights reserved"
+markup:
+  goldmark:
+    extensions:
+      passthrough:
+        enable: true
+        delimiters:
+          block: [['$$', '$$']]
+          inline: [['$', '$']]
 Author:
   name: "wzh"
   email: ""

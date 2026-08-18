@@ -58,32 +58,26 @@ $$
 语言模型定义：
 
 $$
-\pi_\theta(y|x)
-=
-
+\pi_\theta(y|x) =
 \prod_{t=1}^{T}
-\pi_\theta(y_t|x,y_{<t})
+\pi_\theta(y_t|x,y_{&lt;t})
 $$
 
 PPO 对每一个 token 定义 importance ratio：
 
 $$
-w_t(\theta)
-=
-
+w_t(\theta) =
 \frac{
-\pi_\theta(y_t|x,y_{<t})
+\pi_\theta(y_t|x,y_{&lt;t})
 }{
-\pi_{\theta_{\mathrm{old}}}(y_t|x,y_{<t})
+\pi_{\theta_{\mathrm{old}}}(y_t|x,y_{&lt;t})
 }
 $$
 
 然后执行 clipped policy optimization：
 
 $$
-J_{\mathrm{PPO}}(\theta)
-=
-
+J_{\mathrm{PPO}}(\theta) =
 \mathbb{E}
 \left[
 \frac1T
@@ -131,9 +125,7 @@ $$
 然后使用组内 reward normalization：
 
 $$
-\hat A_i
-=
-
+\hat A_i =
 \frac{
 r_i-\operatorname{mean}(r_1,\dots,r_G)
 }{
@@ -154,7 +146,7 @@ $$
 * reward 低于组平均值：
 
 $$
-\hat A_i<0
+\hat A_i&lt;0
 $$
 
 希望降低这个 response 的概率。
@@ -170,22 +162,18 @@ $$
 但是它仍然为每个 token 计算独立 importance ratio：
 
 $$
-w_{i,t}
-=
-
+w_{i,t} =
 \frac{
-\pi_\theta(y_{i,t}|x,y_{i,<t})
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 }{
-\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,<t})
+\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,&lt;t})
 }
 $$
 
 所以 GRPO objective 是：
 
 $$
-J_{\mathrm{GRPO}}(\theta)
-=
-
+J_{\mathrm{GRPO}}(\theta) =
 \mathbb{E}
 \left[
 \frac1G
@@ -204,8 +192,7 @@ $$
 
 $$
 \boxed{
-\text{sequence-level reward/advantage}
-+
+\text{sequence-level reward/advantage} +
 \text{token-level importance ratio}
 }
 $$
@@ -249,9 +236,7 @@ $$
 reward 可能就是：
 
 $$
-r(x,y)
-=
-
+r(x,y) =
 \begin{cases}
 1 & \text{correct}\\
 0 & \text{wrong}
@@ -301,19 +286,15 @@ $$
 完整 sequence probability：
 
 $$
-\pi_\theta(y_i|x)
-=
-
+\pi_\theta(y_i|x) =
 \prod_{t=1}^{T_i}
-\pi_\theta(y_{i,t}|x,y_{i,<t})
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 $$
 
 如果直接构造整个 trajectory 的 likelihood ratio：
 
 $$
-R_i
-=
-
+R_i =
 \frac{
 \pi_\theta(y_i|x)
 }{
@@ -324,23 +305,19 @@ $$
 那么：
 
 $$
-R_i
-=
-
+R_i =
 \prod_{t=1}^{T_i}
 \frac{
-\pi_\theta(y_{i,t}|x,y_{i,<t})
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 }{
-\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,<t})
+\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,&lt;t})
 }
 $$
 
 也就是：
 
 $$
-R_i
-=
-
+R_i =
 \prod_t w_{i,t}
 $$
 
@@ -360,9 +337,7 @@ $$
 
 $$
 \boxed{
-s_i(\theta)
-=
-
+s_i(\theta) =
 \left(
 \frac{
 \pi_\theta(y_i|x)
@@ -376,9 +351,7 @@ $$
 展开：
 
 $$
-s_i(\theta)
-=
-
+s_i(\theta) =
 \left(
 \prod_{t=1}^{T_i}w_{i,t}
 \right)^{1/T_i}
@@ -388,9 +361,7 @@ $$
 
 $$
 \boxed{
-s_i
-=
-
+s_i =
 \operatorname{GeometricMean}
 (w_{i,1},\dots,w_{i,T_i})
 }
@@ -400,16 +371,12 @@ $$
 
 $$
 \boxed{
-\log s_i
-=
-
+\log s_i =
 \frac1{T_i}
 \sum_{t=1}^{T_i}
 \left[
-\log\pi_\theta(y_{i,t}|x,y_{i,<t})
--
-
-\log\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,<t})
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t}) -
+\log\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,&lt;t})
 \right]
 }
 $$
@@ -417,9 +384,7 @@ $$
 最终：
 
 $$
-s_i
-=
-
+s_i =
 \exp(\log s_i)
 $$
 
@@ -432,9 +397,7 @@ $$
 如果直接：
 
 $$
-R_i
-=
-
+R_i =
 \frac{\pi_\theta(y_i|x)}
 {\pi_{\mathrm{old}}(y_i|x)}
 $$
@@ -476,11 +439,8 @@ $$
 但做 geometric mean 后：
 
 $$
-s
-=
-
+s =
 R^{1/T}
-
 1.001
 $$
 
@@ -514,9 +474,7 @@ $$
 GSPO 保留了 GRPO 的 group advantage：
 
 $$
-\hat A_i
-=
-
+\hat A_i =
 \frac{
 r(x,y_i)-\operatorname{mean}_j r(x,y_j)
 }{
@@ -527,9 +485,7 @@ $$
 但是将 token ratio 替换成 sequence ratio：
 
 $$
-s_i(\theta)
-=
-
+s_i(\theta) =
 \left(
 \frac{\pi_\theta(y_i|x)}
 {\pi_{\mathrm{old}}(y_i|x)}
@@ -540,9 +496,7 @@ $$
 
 $$
 \boxed{
-J_{\mathrm{GSPO}}(\theta)
-=
-
+J_{\mathrm{GSPO}}(\theta) =
 \mathbb{E}
 \left[
 \frac1G
@@ -627,9 +581,7 @@ $$
 于是：
 
 $$
-\operatorname{clip}(s_i)
-=
-
+\operatorname{clip}(s_i) =
 1+\epsilon
 $$
 
@@ -638,7 +590,7 @@ $$
 反过来，如果：
 
 $$
-\hat A_i<0
+\hat A_i&lt;0
 $$
 
 说明这是一个较差 response，我们希望：
@@ -650,7 +602,7 @@ $$
 当：
 
 $$
-s_i<1-\epsilon
+s_i&lt;1-\epsilon
 $$
 
 说明它已经被降低得足够多，于是停止进一步惩罚。
@@ -684,18 +636,14 @@ $$
 GSPO：
 
 $$
-J
-=
-
+J =
 s_i(\theta)\hat A_i
 $$
 
 所以：
 
 $$
-\nabla_\theta J
-=
-
+\nabla_\theta J =
 \hat A_i\nabla_\theta s_i
 $$
 
@@ -708,9 +656,7 @@ $$
 得到：
 
 $$
-\nabla_\theta J
-=
-
+\nabla_\theta J =
 s_i\hat A_i
 \nabla_\theta\log s_i
 $$
@@ -718,15 +664,11 @@ $$
 而：
 
 $$
-\log s_i
-=
-
+\log s_i =
 \frac1{T_i}
 \sum_t
 \left(
-\log\pi_\theta(y_{i,t}|x,y_{i,<t})
--
-
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t}) -
 \log\pi_{\mathrm{old}}(\cdots)
 \right)
 $$
@@ -734,27 +676,23 @@ $$
 old policy 与 $(\theta)$ 无关，所以：
 
 $$
-\nabla_\theta\log s_i
-=
-
+\nabla_\theta\log s_i =
 \frac1{T_i}
 \sum_t
 \nabla_\theta
-\log\pi_\theta(y_{i,t}|x,y_{i,<t})
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 $$
 
 最终：
 
 $$
 \boxed{
-\nabla_\theta J_{\mathrm{GSPO}}
-=
-
+\nabla_\theta J_{\mathrm{GSPO}} =
 s_i\hat A_i
 \frac1{T_i}
 \sum_t
 \nabla_\theta
-\log\pi_\theta(y_{i,t}|x,y_{i,<t})
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 }
 $$
 
@@ -785,9 +723,7 @@ $$
 GRPO：
 
 $$
-J
-=
-
+J =
 \frac1T
 \sum_t w_{i,t}\hat A_i
 $$
@@ -796,15 +732,13 @@ $$
 
 $$
 \boxed{
-\nabla_\theta J_{\mathrm{GRPO}}
-=
-
+\nabla_\theta J_{\mathrm{GRPO}} =
 \hat A_i
 \frac1T
 \sum_t
 w_{i,t}
 \nabla_\theta
-\log\pi_\theta(y_{i,t}|x,y_{i,<t})
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 }
 $$
 
@@ -875,9 +809,7 @@ $$
 而 GSPO：
 
 $$
-s
-=
-
+s =
 (1.10\times0.90\times1.05\times0.95)^{1/4}
 $$
 
@@ -928,31 +860,25 @@ $$
 忽略 clipping：
 
 $$
-\nabla J_{\mathrm{GSPO}}
-=
-
+\nabla J_{\mathrm{GSPO}} =
 \hat A_i
 \frac1T
 \sum_t
-\nabla_\theta\log\pi_\theta(y_{i,t}|x,y_{i,<t})
+\nabla_\theta\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 $$
 
 而：
 
 $$
 \sum_t
-\log\pi_\theta(y_{i,t}|x,y_{i,<t})
-=
-
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t}) =
 \log\pi_\theta(y_i|x)
 $$
 
 于是：
 
 $$
-\nabla J
-=
-
+\nabla J =
 \frac{\hat A_i}{T}
 \nabla_\theta
 \log\pi_\theta(y_i|x)
@@ -962,10 +888,8 @@ $$
 
 $$
 \boxed{
-\text{Group-normalized sequence REINFORCE}
-+
-\text{sequence-level off-policy correction}
-+
+\text{Group-normalized sequence REINFORCE} +
+\text{sequence-level off-policy correction} +
 \text{PPO-style clipping}
 }
 $$
@@ -1024,9 +948,7 @@ $$
 GSPO 则先将它们压缩成：
 
 $$
-s
-=
-
+s =
 \exp
 \left(
 \frac1T
@@ -1112,9 +1034,9 @@ Qwen 在 Qwen3-30B-A3B-Base 上观察到：一次 RL gradient update 后，对�
 
 $$
 \frac{
-\pi_\theta(y_t|x,y_{<t})
+\pi_\theta(y_t|x,y_{&lt;t})
 }{
-\pi_{\mathrm{old}}(y_t|x,y_{<t})
+\pi_{\mathrm{old}}(y_t|x,y_{&lt;t})
 }
 $$
 
@@ -1167,9 +1089,7 @@ $$
 这样：
 
 $$
-w_t
-=
-
+w_t =
 \frac{\pi_\theta(y_t)}
 {\pi_{\mathrm{old}}(y_t)}
 $$
@@ -1199,9 +1119,7 @@ $$
 而只关心：
 
 $$
-s_i
-=
-
+s_i =
 \exp
 \left(
 \frac1T\sum_t\log w_t
@@ -1330,16 +1248,12 @@ Qwen 的实验中：
 GSPO 使用 asymmetric clipping：
 
 $$
-\epsilon_{\mathrm{low}}
-=
-
+\epsilon_{\mathrm{low}} =
 3\times10^{-4}
 $$
 
 $$
-\epsilon_{\mathrm{high}}
-=
-
+\epsilon_{\mathrm{high}} =
 4\times10^{-4}
 $$
 
@@ -1429,20 +1343,15 @@ $$
 例如数学 RLVR：
 
 $$
-r_i
-=
-
+r_i =
 \mathbb{1}[\text{answer correct}]
 $$
 
 或者：
 
 $$
-r_i
-=
-
-r_{\mathrm{correct}}
-+
+r_i =
+r_{\mathrm{correct}} +
 r_{\mathrm{format}}
 +\cdots
 $$
@@ -1452,24 +1361,18 @@ $$
 ## Step 4：计算 Group Advantage
 
 $$
-\mu_r
-=
-
+\mu_r =
 \frac1G
 \sum_i r_i
 $$
 
 $$
-\sigma_r
-=
-
+\sigma_r =
 \operatorname{std}(r_1,\dots,r_G)
 $$
 
 $$
-\hat A_i
-=
-
+\hat A_i =
 \frac{r_i-\mu_r}{\sigma_r}
 $$
 
@@ -1488,12 +1391,10 @@ $$
 对于每个 token：
 
 $$
-\log p_{i,t}^{old}
-=
-
+\log p_{i,t}^{old} =
 \log
 \pi_{\theta_{\mathrm{old}}}
-(y_{i,t}|x,y_{i,<t})
+(y_{i,t}|x,y_{i,&lt;t})
 $$
 
 ---
@@ -1503,12 +1404,10 @@ $$
 计算：
 
 $$
-\log p_{i,t}^{new}
-=
-
+\log p_{i,t}^{new} =
 \log
 \pi_\theta
-(y_{i,t}|x,y_{i,<t})
+(y_{i,t}|x,y_{i,&lt;t})
 $$
 
 ---
@@ -1516,20 +1415,15 @@ $$
 ## Step 7：计算 Sequence Log Ratio
 
 $$
-\Delta_{i,t}
-=
-
+\Delta_{i,t} =
 \log p_{i,t}^{new}
-
 \log p_{i,t}^{old}
 $$
 
 然后：
 
 $$
-\log s_i
-=
-
+\log s_i =
 \frac1{T_i}
 \sum_t
 \Delta_{i,t}
@@ -1540,9 +1434,7 @@ $$
 ## Step 8：Exponentiate
 
 $$
-s_i
-=
-
+s_i =
 \exp(\log s_i)
 $$
 
@@ -1551,9 +1443,7 @@ $$
 ## Step 9：Sequence-level Clipping
 
 $$
-L_i
-=
-
+L_i =
 \min
 \left(
 s_i\hat A_i,
@@ -1568,9 +1458,7 @@ $$
 ## Step 10：Aggregate
 
 $$
-J
-=
-
+J =
 \frac1G
 \sum_iL_i
 $$
@@ -1579,9 +1467,7 @@ $$
 
 $$
 \boxed{
-L_{\mathrm{GSPO}}
-=
-
+L_{\mathrm{GSPO}} =
 -J_{\mathrm{GSPO}}
 }
 $$
@@ -1593,9 +1479,7 @@ $$
 因为：
 
 $$
-s_i
-=
-
+s_i =
 \exp
 \left(
 \frac1T
@@ -1739,9 +1623,7 @@ $$
 以及：
 
 $$
-\hat A_i
-=
-
+\hat A_i =
 \frac{r_i-\mu_r}{\sigma_r}
 $$
 
@@ -1773,10 +1655,8 @@ $$
 
 $$
 \boxed{
-\underbrace{\text{Group}}_{\text{GRPO-style advantage}}
-+
-\underbrace{\text{Sequence}}_{\text{sequence importance ratio}}
-+
+\underbrace{\text{Group}}_{\text{GRPO-style advantage}} +
+\underbrace{\text{Sequence}}_{\text{sequence importance ratio}} +
 \underbrace{\text{Policy Optimization}}_{\text{PPO-style clipped objective}}
 }
 $$
@@ -1804,11 +1684,8 @@ $$
 
 $$
 \boxed{
-\text{GRPO}
-=
-
-\text{Group Advantage}
-+
+\text{GRPO} =
+\text{Group Advantage} +
 \text{Token Ratio}
 }
 $$
@@ -1817,11 +1694,8 @@ $$
 
 $$
 \boxed{
-\text{GSPO}
-=
-
-\text{Group Advantage}
-+
+\text{GSPO} =
+\text{Group Advantage} +
 \text{Sequence Ratio}
 }
 $$
@@ -1871,17 +1745,15 @@ $$
 GSPO-token 为此定义：
 
 $$
-s_{i,t}(\theta)
-=
-
+s_{i,t}(\theta) =
 \operatorname{sg}[s_i(\theta)]
 \cdot
 \frac{
-\pi_\theta(y_{i,t}|x,y_{i,<t})
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 }{
 \operatorname{sg}
 [
-\pi_\theta(y_{i,t}|x,y_{i,<t})
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 ]
 }
 $$
@@ -1998,13 +1870,9 @@ $$
 对于 GRPO：
 
 $$
-w_t
-=
-
+w_t =
 \exp(
-\log p_t^{new}
--
-
+\log p_t^{new} -
 \log p_t^{old}
 )
 $$
@@ -2102,9 +1970,7 @@ $$
 这些 token 会影响：
 
 $$
-s_i
-=
-
+s_i =
 \exp(\operatorname{mean}\log w_t)
 $$
 
@@ -2138,8 +2004,7 @@ SAPO 因此尝试做到：
 
 $$
 \boxed{
-\text{sequence coherence}
-+
+\text{sequence coherence} +
 \text{token adaptivity}
 }
 $$
@@ -2150,9 +2015,9 @@ $$
 
 $$
 \text{token}
-<
+&lt;
 \boxed{\text{subsentence}}
-<
+&lt;
 \text{sequence}
 $$
 
@@ -2219,11 +2084,9 @@ $$
 但是 optimization 使用：
 
 $$
-w_t
-=
-
-\frac{\pi_\theta(y_t|y_{<t})}
-{\pi_{\mathrm{old}}(y_t|y_{<t})}
+w_t =
+\frac{\pi_\theta(y_t|y_{&lt;t})}
+{\pi_{\mathrm{old}}(y_t|y_{&lt;t})}
 $$
 
 于是：
@@ -2234,7 +2097,7 @@ $$
 A(y)
 \sum_t
 w_t
-\nabla\log\pi_\theta(y_t|y_{<t})
+\nabla\log\pi_\theta(y_t|y_{&lt;t})
 $$
 
 GSPO 认为这里存在：
@@ -2256,9 +2119,7 @@ $$
 替换成：
 
 $$
-s(y)
-=
-
+s(y) =
 \left(
 \frac{\pi_\theta(y|x)}
 {\pi_{\mathrm{old}}(y|x)}
@@ -2273,7 +2134,7 @@ $$
 s(y)A(y)
 \frac1T
 \sum_t
-\nabla\log\pi_\theta(y_t|y_{<t})
+\nabla\log\pi_\theta(y_t|y_{&lt;t})
 $$
 
 于是：
@@ -2322,9 +2183,7 @@ $$
 
 $$
 \boxed{
-A_i
-=
-
+A_i =
 \frac{r_i-\mu_r}{\sigma_r}
 }
 $$
@@ -2333,15 +2192,11 @@ $$
 
 $$
 \boxed{
-\log s_i
-=
-
+\log s_i =
 \frac1{|y_i|}
 \sum_t
 \left(
-\log\pi_\theta(y_{i,t})
--
-
+\log\pi_\theta(y_{i,t}) -
 \log\pi_{\mathrm{old}}(y_{i,t})
 \right)
 }
@@ -2357,9 +2212,7 @@ $$
 
 $$
 \boxed{
-J_{\mathrm{GSPO}}
-=
-
+J_{\mathrm{GSPO}} =
 \frac1G
 \sum_i
 \min
@@ -2381,7 +2234,7 @@ $$
 s_iA_i
 \frac1{|y_i|}
 \sum_t
-\nabla\log\pi_\theta(y_{i,t}|x,y_{i,<t})
+\nabla\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
 }
 $$
 
