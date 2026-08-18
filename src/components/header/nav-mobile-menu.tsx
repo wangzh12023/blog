@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { Menu, ChevronDown, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -47,8 +48,8 @@ const MenuItemComponent: React.FC<{ item: MenuItem; depth?: number }> = ({ item,
   }
 
   return (
-    <a
-      href={item.href}
+    <Link
+      href={item.href ?? ""}
       title={item.title}
       className={cn(
         "block py-2 text-lg font-medium transition-colors hover:text-primary",
@@ -57,7 +58,7 @@ const MenuItemComponent: React.FC<{ item: MenuItem; depth?: number }> = ({ item,
       )}
     >
       {item.title}
-    </a>
+    </Link>
   )
 }
 

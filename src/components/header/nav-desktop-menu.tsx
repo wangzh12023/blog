@@ -30,7 +30,7 @@ export function NavDesktopMenu() {
                       <ListItem
                         key={subItem.title}
                         title={subItem.title}
-                        href={subItem.href}
+                        href={subItem.href ?? ""}
                       >
                         {subItem.title}
                       </ListItem>
@@ -39,11 +39,11 @@ export function NavDesktopMenu() {
                 </NavigationMenuContent>
               </>
             ) : (
-              <Link href={item.href ?? ""} title={item.title} legacyBehavior passHref>
-                <NavigationMenuLink className={navigationMenuTriggerStyle()}>
+              <NavigationMenuLink asChild className={navigationMenuTriggerStyle()}>
+                <Link href={item.href ?? ""} title={item.title}>
                   {item.title}
-                </NavigationMenuLink>
-              </Link>
+                </Link>
+              </NavigationMenuLink>
             )}
           </NavigationMenuItem>
         ))}
@@ -52,15 +52,19 @@ export function NavDesktopMenu() {
   )
 }
 
-const ListItem = React.forwardRef<
-  React.ElementRef<"a">,
-  React.ComponentPropsWithoutRef<"a">
->(({ className, title, ...props }, ref) => {
+function ListItem({
+  className,
+  title,
+  children,
+  ...props
+}: Omit<React.ComponentProps<typeof Link>, "children"> & {
+  title: string
+  children?: React.ReactNode
+}) {
   return (
     <li>
       <NavigationMenuLink asChild>
-        <a
-          ref={ref}
+        <Link
           title={title}
           className={cn(
             "block select-none space-y-1 rounded-md p-3 leading-none no-underline outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
@@ -68,10 +72,9 @@ const ListItem = React.forwardRef<
           )}
           {...props}
         >
-          <div className="text-2xg font-bold leading-none">{title}</div>
-        </a>
+          <div className="text-2xg font-bold leading-none">{children}</div>
+        </Link>
       </NavigationMenuLink>
     </li>
   )
-})
-ListItem.displayName = "ListItem"
+}
