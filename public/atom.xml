@@ -1,0 +1,3022 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://wangzh12023.github.io/blog</id>
+    <title>WZH 的博客</title>
+    <updated>2026-08-18T16:05:40.874Z</updated>
+    <generator>Feed for Node.js</generator>
+    <author>
+        <name>wzh</name>
+        <email>3350782760@qq.com</email>
+        <uri>https://wangzh12023.github.io/blog</uri>
+    </author>
+    <link rel="alternate" href="https://wangzh12023.github.io/blog"/>
+    <link rel="self" href="https://wangzh12023.github.io/blog/atom.xml"/>
+    <subtitle>一个分享技术文章、效率工具与个人见解的博客</subtitle>
+    <logo>https://wangzh12023.github.io/blog/favicon.png</logo>
+    <icon>https://wangzh12023.github.io/blog/favicon.ico</icon>
+    <rights>All rights reserved 2026, wzh</rights>
+    <entry>
+        <title type="html"><![CDATA[GSPO：Group Sequence Policy Optimization 详解]]></title>
+        <id>https://wangzh12023.github.io/blog/blog/gspo</id>
+        <link href="https://wangzh12023.github.io/blog/blog/gspo"/>
+        <updated>2026-08-18T00:00:00.000Z</updated>
+        <summary type="html"><![CDATA[从 PPO、GRPO 到 GSPO，系统讲解 sequence-level importance ratio、clipping、长 CoT 与 MoE 训练稳定性。]]></summary>
+        <content type="html"><![CDATA[<p>GSPO（<strong>Group Sequence Policy Optimization</strong>）是 Qwen 团队在 2025 年提出的一种用于 LLM 强化学习后训练的策略优化算法。它直接建立在 GRPO 的框架之上，但做了一个非常关键的改变：</p>
+<blockquote>
+<p><strong>GRPO 在 token level 计算 importance ratio 并进行 clipping；GSPO 将 importance ratio、clipping 和主要优化单位统一提升到了 sequence level。</strong></p>
+</blockquote>
+<p>因此，理解 GSPO 最重要的并不是记住一个新的 loss，而是理解这一变化：</p>
+<p>$$
+\boxed{
+\text{token-level policy correction}
+\quad\longrightarrow\quad
+\text{sequence-level policy correction}
+}
+$$</p>
+<p>Qwen 团队提出 GSPO 的主要目标，是解决大规模 LLM RL，特别是 <strong>长 CoT + MoE 模型</strong>训练过程中 GRPO 出现的高方差和训练不稳定问题。原论文报告 GSPO 相比 GRPO 有更好的训练稳定性和效率，并且不再需要 Qwen 此前为 MoE RL 引入的 Routing Replay。</p>
+<hr>
+<h1>1. GSPO 从哪里来？</h1>
+<p>从算法演化关系看，可以简单理解成：</p>
+<p>$$
+\boxed{
+\text{PPO}
+\rightarrow
+\text{GRPO}
+\rightarrow
+\text{GSPO}
+}
+$$</p>
+<p>但三者解决的问题不同。</p>
+<h2>1.1 PPO</h2>
+<p>对于一个 prompt：</p>
+<p>$$
+x
+$$</p>
+<p>模型生成 response：</p>
+<p>$$
+y=(y_1,\dots,y_T)
+$$</p>
+<p>语言模型定义：</p>
+<p>$$
+\pi_\theta(y|x) =
+\prod_{t=1}^{T}
+\pi_\theta(y_t|x,y_{&lt;t})
+$$</p>
+<p>PPO 对每一个 token 定义 importance ratio：</p>
+<p>$$
+w_t(\theta) =
+\frac{
+\pi_\theta(y_t|x,y_{&lt;t})
+}{
+\pi_{\theta_{\mathrm{old}}}(y_t|x,y_{&lt;t})
+}
+$$</p>
+<p>然后执行 clipped policy optimization：</p>
+<p>$$
+J_{\mathrm{PPO}}(\theta) =
+\mathbb{E}
+\left[
+\frac1T
+\sum_{t=1}^{T}
+\min
+\left(
+w_t\hat A_t,
+\operatorname{clip}(w_t,1-\epsilon,1+\epsilon)\hat A_t
+\right)
+\right]
+$$</p>
+<p>PPO 的重要特点是：</p>
+<p>$$
+\boxed{\text{token-level advantage}+\text{token-level ratio}}
+$$</p>
+<p>其中 $(\hat A_t)$ 通常需要 Value Model / Critic 进行估计。对于 LLM，这意味着除了 Policy Model，通常还需要维护一个规模相当大的 Value Model，带来显著的计算和显存开销。</p>
+<hr>
+<h1>2. GRPO 做了什么？</h1>
+<p>GRPO 最重要的变化其实不是 importance ratio，而是：</p>
+<p>$$
+\boxed{\text{去掉 Value Model}}
+$$</p>
+<p>对于同一个 prompt $(x)$，从 old policy 中采样 $(G)$ 个 response：</p>
+<p>$$
+y_1,\dots,y_G
+\sim
+\pi_{\theta_{\mathrm{old}}}(\cdot|x)
+$$</p>
+<p>分别得到：</p>
+<p>$$
+r_1,\dots,r_G
+$$</p>
+<p>然后使用组内 reward normalization：</p>
+<p>$$
+\hat A_i =
+\frac{
+r_i-\operatorname{mean}(r_1,\dots,r_G)
+}{
+\operatorname{std}(r_1,\dots,r_G)
+}
+$$</p>
+<p>于是：</p>
+<ul>
+<li>reward 高于组平均值：</li>
+</ul>
+<p>$$
+\hat A_i&gt;0
+$$</p>
+<p>希望提高这个 response 的概率；</p>
+<ul>
+<li>reward 低于组平均值：</li>
+</ul>
+<p>$$
+\hat A_i&lt;0
+$$</p>
+<p>希望降低这个 response 的概率。</p>
+<p>GRPO 的关键特点是：</p>
+<blockquote>
+<p>一个 response 中的所有 token 都共享同一个 sequence-level advantage：</p>
+</blockquote>
+<p>$$
+\hat A_{i,t}=\hat A_i
+$$</p>
+<p>但是它仍然为每个 token 计算独立 importance ratio：</p>
+<p>$$
+w_{i,t} =
+\frac{
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+}{
+\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,&lt;t})
+}
+$$</p>
+<p>所以 GRPO objective 是：</p>
+<p>$$
+J_{\mathrm{GRPO}}(\theta) =
+\mathbb{E}
+\left[
+\frac1G
+\sum_{i=1}^{G}
+\frac1{|y_i|}
+\sum_{t=1}^{|y_i|}
+\min
+\left(
+w_{i,t}\hat A_i,
+\operatorname{clip}(w_{i,t},1-\epsilon,1+\epsilon)\hat A_i
+\right)
+\right]
+$$</p>
+<p>也就是说：</p>
+<p>$$
+\boxed{
+\text{sequence-level reward/advantage} +
+\text{token-level importance ratio}
+}
+$$</p>
+<p>这正是 GSPO 认为有问题的地方。</p>
+<hr>
+<h1>3. GSPO 认为 GRPO 的核心问题是什么？</h1>
+<p>GSPO 论文提出了一个核心原则：</p>
+<p>$$
+\boxed{
+\text{Unit of Optimization}
+\approx
+\text{Unit of Reward}
+}
+$$</p>
+<p>即：</p>
+<blockquote>
+<p>reward 如果是针对整条 sequence 给出的，那么用于 off-policy correction 和 clipping 的单位也应该对应整条 sequence。</p>
+</blockquote>
+<p>GRPO 的 reward 是：</p>
+<p>$$
+r(x,y_i)
+$$</p>
+<p>也就是说 verifier 实际评价的是：</p>
+<p>$$
+\boxed{\text{整个 response}}
+$$</p>
+<p>例如数学 RLVR：</p>
+<blockquote>
+<p>“最终答案对不对？”</p>
+</blockquote>
+<p>reward 可能就是：</p>
+<p>$$
+r(x,y) =
+\begin{cases}
+1 &amp; \text{correct}\
+0 &amp; \text{wrong}
+\end{cases}
+$$</p>
+<p>reward 并没有告诉模型：</p>
+<ul>
+<li>token 37 是好的；</li>
+<li>token 82 是坏的；</li>
+<li>token 151 应该增加概率。</li>
+</ul>
+<p>但是 GRPO 的 off-policy correction 却变成：</p>
+<p>$$
+w_{i,1},w_{i,2},\dots,w_{i,T}
+$$</p>
+<p>即：</p>
+<p>$$
+\boxed{\text{一个 sequence reward，却产生了大量 token-wise importance weights}}
+$$</p>
+<p>GSPO 作者认为，这会向 gradient 中引入大量没有可靠统计支撑的 token-level variance，且这种噪声随着 response 变长而累积。</p>
+<p>这里需要一个准确性上的区分：</p>
+<p><strong>“token-level importance sampling 本身在强化学习中是不成立的”并不是一个普遍结论。</strong> Per-decision importance sampling 在合适的 RL formulation 中完全可以有理论依据。</p>
+<p>更准确地说：</p>
+<blockquote>
+<p>这是 GSPO 作者针对当前 GRPO formulation 提出的批评：GRPO 给 sequence-level reward/advantage，却使用每个位置单独的一次 token sample 构造 token ratio 并直接用来重新加权梯度；他们认为这种设计在大规模 LLM RL 中会产生高方差和不稳定性。</p>
+</blockquote>
+<p>这是 GSPO 论文的算法观点，而不应扩展成“所有 token-level IS 都是错误的”。</p>
+<hr>
+<h1>4. GSPO 的核心：Sequence-level Importance Ratio</h1>
+<p>对于 response：</p>
+<p>$$
+y_i=(y_{i,1},\dots,y_{i,T_i})
+$$</p>
+<p>完整 sequence probability：</p>
+<p>$$
+\pi_\theta(y_i|x) =
+\prod_{t=1}^{T_i}
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+$$</p>
+<p>如果直接构造整个 trajectory 的 likelihood ratio：</p>
+<p>$$
+R_i =
+\frac{
+\pi_\theta(y_i|x)
+}{
+\pi_{\theta_{\mathrm{old}}}(y_i|x)
+}
+$$</p>
+<p>那么：</p>
+<p>$$
+R_i =
+\prod_{t=1}^{T_i}
+\frac{
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+}{
+\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,&lt;t})
+}
+$$</p>
+<p>也就是：</p>
+<p>$$
+R_i =
+\prod_t w_{i,t}
+$$</p>
+<p>但是这里立刻出现一个问题：</p>
+<h3>sequence 越长，product 的数值波动越严重。</h3>
+<p>例如：</p>
+<p>$$
+1.01^{1000}\approx 20959
+$$</p>
+<p>即使每个 token 的概率只发生很小的变化，乘 1000 次以后整个 sequence ratio 都可能变得极端。</p>
+<p>因此 GSPO <strong>并不直接使用原始 trajectory ratio</strong>，而是使用长度归一化：</p>
+<p>$$
+\boxed{
+s_i(\theta) =
+\left(
+\frac{
+\pi_\theta(y_i|x)
+}{
+\pi_{\theta_{\mathrm{old}}}(y_i|x)
+}
+\right)^{1/T_i}
+}
+$$</p>
+<p>展开：</p>
+<p>$$
+s_i(\theta) =
+\left(
+\prod_{t=1}^{T_i}w_{i,t}
+\right)^{1/T_i}
+$$</p>
+<p>也就是说：</p>
+<p>$$
+\boxed{
+s_i =
+\operatorname{GeometricMean}
+(w_{i,1},\dots,w_{i,T_i})
+}
+$$</p>
+<p>或者在 log space：</p>
+<p>$$
+\boxed{
+\log s_i =
+\frac1{T_i}
+\sum_{t=1}^{T_i}
+\left[
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t}) -
+\log\pi_{\theta_{\mathrm{old}}}(y_{i,t}|x,y_{i,&lt;t})
+\right]
+}
+$$</p>
+<p>最终：</p>
+<p>$$
+s_i =
+\exp(\log s_i)
+$$</p>
+<p>这就是 GSPO 最核心的公式。</p>
+<hr>
+<h1>5. 为什么一定要做 Length Normalization？</h1>
+<p>如果直接：</p>
+<p>$$
+R_i =
+\frac{\pi_\theta(y_i|x)}
+{\pi_{\mathrm{old}}(y_i|x)}
+$$</p>
+<p>那么不同长度 response 的 ratio 无法直接使用相同 clipping range。</p>
+<p>例如两个 sequence 的平均 token probability change 完全相同：</p>
+<p>$$
+w_t=1.001
+$$</p>
+<p>但一个长度：</p>
+<p>$$
+T=100
+$$</p>
+<p>另一个：</p>
+<p>$$
+T=2000
+$$</p>
+<p>则：</p>
+<p>$$
+R_{100}=1.001^{100}
+$$</p>
+<p>而：</p>
+<p>$$
+R_{2000}=1.001^{2000}
+$$</p>
+<p>两者会出现非常大的差异。</p>
+<p>但做 geometric mean 后：</p>
+<p>$$
+s =
+R^{1/T}
+1.001
+$$</p>
+<p>于是：</p>
+<p>$$
+\boxed{\text{sequence length 对 importance ratio scale 的影响基本被消除}}
+$$</p>
+<p>Qwen 论文明确指出，length normalization 的目的就是降低 variance，同时让不同长度 response 的 importance ratio 落在统一的 numerical range 中。</p>
+<p>因此严格来说，GSPO 使用的是：</p>
+<p>$$
+\boxed{\text{length-normalized sequence likelihood ratio}}
+$$</p>
+<p>而不是原始 importance sampling 中未经修改的：</p>
+<p>$$
+\frac{\pi_\theta(y|x)}
+{\pi_{\mathrm{old}}(y|x)}
+$$</p>
+<p>这个区别很重要。</p>
+<hr>
+<h1>6. GSPO Objective</h1>
+<p>GSPO 保留了 GRPO 的 group advantage：</p>
+<p>$$
+\hat A_i =
+\frac{
+r(x,y_i)-\operatorname{mean}_j r(x,y_j)
+}{
+\operatorname{std}_j r(x,y_j)
+}
+$$</p>
+<p>但是将 token ratio 替换成 sequence ratio：</p>
+<p>$$
+s_i(\theta) =
+\left(
+\frac{\pi_\theta(y_i|x)}
+{\pi_{\mathrm{old}}(y_i|x)}
+\right)^{1/T_i}
+$$</p>
+<p>最终 objective：</p>
+<p>$$
+\boxed{
+J_{\mathrm{GSPO}}(\theta) =
+\mathbb{E}
+\left[
+\frac1G
+\sum_{i=1}^{G}
+\min
+\left(
+s_i(\theta)\hat A_i,
+\operatorname{clip}
+\left(
+s_i(\theta),
+1-\epsilon,
+1+\epsilon
+\right)
+\hat A_i
+\right)
+\right]
+}
+$$</p>
+<p>与 GRPO 对比：</p>
+<h3>GRPO</h3>
+<p>$$
+\frac1T
+\sum_t
+\min
+\left(
+w_{i,t}A_i,
+\operatorname{clip}(w_{i,t})A_i
+\right)
+$$</p>
+<h3>GSPO</h3>
+<p>$$
+\min
+\left(
+s_iA_i,
+\operatorname{clip}(s_i)A_i
+\right)
+$$</p>
+<p>所以最本质的变化就是：</p>
+<p>$$
+\boxed{
+{w_{i,1},w_{i,2},\dots,w_{i,T}}
+\rightarrow
+s_i
+}
+$$</p>
+<p>整条 sequence 只对应一个 importance ratio。</p>
+<hr>
+<h1>7. Sequence-level Clipping 到底是什么意思？</h1>
+<p>假设：</p>
+<p>$$
+\hat A_i&gt;0
+$$</p>
+<p>说明这个 response 比同组其他 response 更好。</p>
+<p>我们希望：</p>
+<p>$$
+\pi_\theta(y_i|x)\uparrow
+$$</p>
+<p>如果：</p>
+<p>$$
+s_i&gt;1+\epsilon
+$$</p>
+<p>意味着 current policy 已经把这条 response 的相对概率提高得足够多。</p>
+<p>于是：</p>
+<p>$$
+\operatorname{clip}(s_i) =
+1+\epsilon
+$$</p>
+<p>后续不再继续鼓励它。</p>
+<p>反过来，如果：</p>
+<p>$$
+\hat A_i&lt;0
+$$</p>
+<p>说明这是一个较差 response，我们希望：</p>
+<p>$$
+\pi_\theta(y_i|x)\downarrow
+$$</p>
+<p>当：</p>
+<p>$$
+s_i&lt;1-\epsilon
+$$</p>
+<p>说明它已经被降低得足够多，于是停止进一步惩罚。</p>
+<p>所以 PPO、GRPO 和 GSPO 都可以理解为：</p>
+<p>$$
+\boxed{\text{不要让一次 policy update 离 rollout policy 太远}}
+$$</p>
+<p>区别只是这个“距离”在哪里判断：</p>
+<p>$$
+\begin{array}{c|c}
+\text{Algorithm} &amp; \text{Clipping Granularity}\
+\hline
+\text{PPO} &amp; Token\
+\text{GRPO} &amp; Token\
+\text{GSPO} &amp; Sequence
+\end{array}
+$$</p>
+<hr>
+<h1>8. GSPO 与 GRPO 最大的数学区别：Gradient Weight</h1>
+<p>这一部分实际上是理解 GSPO 最关键的地方。</p>
+<p>先暂时忽略 clipping。</p>
+<p>GSPO：</p>
+<p>$$
+J =
+s_i(\theta)\hat A_i
+$$</p>
+<p>所以：</p>
+<p>$$
+\nabla_\theta J =
+\hat A_i\nabla_\theta s_i
+$$</p>
+<p>利用：</p>
+<p>$$
+\nabla s=s\nabla\log s
+$$</p>
+<p>得到：</p>
+<p>$$
+\nabla_\theta J =
+s_i\hat A_i
+\nabla_\theta\log s_i
+$$</p>
+<p>而：</p>
+<p>$$
+\log s_i =
+\frac1{T_i}
+\sum_t
+\left(
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t}) -
+\log\pi_{\mathrm{old}}(\cdots)
+\right)
+$$</p>
+<p>old policy 与 $(\theta)$ 无关，所以：</p>
+<p>$$
+\nabla_\theta\log s_i =
+\frac1{T_i}
+\sum_t
+\nabla_\theta
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+$$</p>
+<p>最终：</p>
+<p>$$
+\boxed{
+\nabla_\theta J_{\mathrm{GSPO}} =
+s_i\hat A_i
+\frac1{T_i}
+\sum_t
+\nabla_\theta
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+}
+$$</p>
+<p>注意：</p>
+<p>$$
+s_i\hat A_i
+$$</p>
+<p>对于这条 response 中所有 token 是<strong>完全相同的</strong>。</p>
+<p>因此每个 token gradient：</p>
+<p>$$
+\nabla\log\pi_\theta(y_{i,t}|\cdots)
+$$</p>
+<p>都获得同样的 sequence-level weight：</p>
+<p>$$
+\boxed{s_i\hat A_i}
+$$</p>
+<hr>
+<h1>9. 再看 GRPO 的 Gradient</h1>
+<p>GRPO：</p>
+<p>$$
+J =
+\frac1T
+\sum_t w_{i,t}\hat A_i
+$$</p>
+<p>因此：</p>
+<p>$$
+\boxed{
+\nabla_\theta J_{\mathrm{GRPO}} =
+\hat A_i
+\frac1T
+\sum_t
+w_{i,t}
+\nabla_\theta
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+}
+$$</p>
+<p>这里最大的区别出现了。</p>
+<p>GRPO：</p>
+<p>$$
+w_{i,1},
+w_{i,2},
+\dots,
+w_{i,T}
+$$</p>
+<p>每个 token 的 gradient 权重都不一样：</p>
+<p>$$
+w_{i,t}\hat A_i
+$$</p>
+<p>而 GSPO：</p>
+<p>$$
+s_i,s_i,\dots,s_i
+$$</p>
+<p>所有 token 都使用：</p>
+<p>$$
+s_i\hat A_i
+$$</p>
+<p>所以：</p>
+<p>$$
+\boxed{
+\begin{aligned}
+\text{GRPO: }&amp;
+w_{i,t}\hat A_i
+\nabla\log\pi_\theta(y_{i,t})\[2mm]
+\text{GSPO: }&amp;
+s_i\hat A_i
+\nabla\log\pi_\theta(y_{i,t})
+\end{aligned}
+}
+$$</p>
+<p>这实际上比单纯说“GSPO 是 sequence clipping”更能说明算法本质。</p>
+<hr>
+<h1>10. 一个直观例子</h1>
+<p>假设一条 response 有四个 token，对应 old policy → current policy 的 token ratios：</p>
+<p>$$
+[1.10,\ 0.90,\ 1.05,\ 0.95]
+$$</p>
+<p>GRPO 会分别使用：</p>
+<p>$$
+1.10,\quad0.90,\quad1.05,\quad0.95
+$$</p>
+<p>来 weight 四个 token 的 gradients。</p>
+<p>而 GSPO：</p>
+<p>$$
+s =
+(1.10\times0.90\times1.05\times0.95)^{1/4}
+$$</p>
+<p>大约为：</p>
+<p>$$
+s\approx0.997
+$$</p>
+<p>于是四个 token 都使用：</p>
+<p>$$
+0.997\hat A
+$$</p>
+<p>作为 sequence-level coefficient。</p>
+<p>从整条 response 看：</p>
+<p>$$
+s\approx1
+$$</p>
+<p>意味着：</p>
+<blockquote>
+<p>old policy 和 current policy 对这条完整 response 的平均 likelihood 基本没有变化。</p>
+</blockquote>
+<p>GSPO 因此不会因为其中某一个 token 的 ratio 是 1.10、另一个是 0.90，就对不同 token 施加非常不同的 off-policy correction。</p>
+<hr>
+<h1>11. GSPO 其实非常接近一种 Sequence-level REINFORCE</h1>
+<p>这是从公式可以直接得到的一个理解。</p>
+<p>考虑：</p>
+<p>$$
+\theta=\theta_{\mathrm{old}}
+$$</p>
+<p>此时：</p>
+<p>$$
+s_i=1
+$$</p>
+<p>忽略 clipping：</p>
+<p>$$
+\nabla J_{\mathrm{GSPO}} =
+\hat A_i
+\frac1T
+\sum_t
+\nabla_\theta\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+$$</p>
+<p>而：</p>
+<p>$$
+\sum_t
+\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t}) =
+\log\pi_\theta(y_i|x)
+$$</p>
+<p>于是：</p>
+<p>$$
+\nabla J =
+\frac{\hat A_i}{T}
+\nabla_\theta
+\log\pi_\theta(y_i|x)
+$$</p>
+<p>所以从这个角度，可以将 GSPO 理解为：</p>
+<p>$$
+\boxed{
+\text{Group-normalized sequence REINFORCE} +
+\text{sequence-level off-policy correction} +
+\text{PPO-style clipping}
+}
+$$</p>
+<p>其中 group baseline 来自同 prompt 的多个 sampled responses。</p>
+<p>这个理解通常比单独记忆 GSPO loss 更容易把 GSPO 放到 RL 的整体框架里。</p>
+<hr>
+<h1>12. 为什么 GSPO 对 Long CoT 更稳定？</h1>
+<p>假设一个 reasoning response 有：</p>
+<p>$$
+T=8000
+$$</p>
+<p>个 tokens。</p>
+<p>GRPO 会产生：</p>
+<p>$$
+8000
+$$</p>
+<p>个不同的：</p>
+<p>$$
+w_t
+$$</p>
+<p>因此 gradient 类似：</p>
+<p>$$
+\sum_{t=1}^{8000}
+w_t A\nabla\log\pi_t
+$$</p>
+<p>其中某些：</p>
+<p>$$
+w_t\gg1
+$$</p>
+<p>某些：</p>
+<p>$$
+w_t\ll1
+$$</p>
+<p>而且不同 token 会单独触发 clipping。</p>
+<p>随着 sequence 变长，这种 token-level variation 会不断累积。</p>
+<p>GSPO 则先将它们压缩成：</p>
+<p>$$
+s =
+\exp
+\left(
+\frac1T
+\sum_t\log w_t
+\right)
+$$</p>
+<p>然后：</p>
+<p>$$
+\nabla J
+\propto
+sA
+\frac1T
+\sum_t\nabla\log\pi_t
+$$</p>
+<p>因此它实际上在问：</p>
+<blockquote>
+<p>“current policy 整体上对这条 reasoning trajectory 的 likelihood 改变了多少？”</p>
+</blockquote>
+<p>而不是：</p>
+<blockquote>
+<p>“第 5387 个 token 的 probability 改了多少？”</p>
+</blockquote>
+<p>对于只有 sequence-level verifier reward 的数学、代码等 RLVR 场景，这种 granularity 与 reward granularity 更自然地对齐。这正是 GSPO 的核心设计逻辑。</p>
+<hr>
+<h1>13. 为什么 GSPO 对 MoE 特别重要？</h1>
+<p>这是 GSPO 论文非常重要的一部分。</p>
+<p>对于 Dense Transformer：</p>
+<p>$$
+x
+\rightarrow
+\text{固定的全部参数}
+$$</p>
+<p>每次 forward 使用的 network structure 基本一致。</p>
+<p>但对于 MoE：</p>
+<p>$$
+x_t
+\rightarrow
+\text{Router}
+\rightarrow
+\text{Expert}<em>{k_1},\text{Expert}</em>{k_2}
+$$</p>
+<p>每个 token 激活哪些 experts 是动态的。</p>
+<p>因此：</p>
+<p>$$
+\pi_{\mathrm{old}}
+$$</p>
+<p>生成 rollout 时可能使用：</p>
+<p>$$
+E_3,E_7
+$$</p>
+<p>而做几次 gradient update 以后，同样的 token 在：</p>
+<p>$$
+\pi_\theta
+$$</p>
+<p>里可能变成：</p>
+<p>$$
+E_2,E_7
+$$</p>
+<p>Qwen 在 Qwen3-30B-A3B-Base 上观察到：一次 RL gradient update 后，对于同一个 rollout sample，新旧 policy 激活的 experts 中大约有 <strong>10% 发生变化</strong>。</p>
+<p>这会使：</p>
+<p>$$
+\frac{
+\pi_\theta(y_t|x,y_{&lt;t})
+}{
+\pi_{\mathrm{old}}(y_t|x,y_{&lt;t})
+}
+$$</p>
+<p>发生明显波动。</p>
+<p>问题不仅仅是参数改变了，而是：</p>
+<p>$$
+\boxed{\text{实际参与计算的 expert network 也可能改变}}
+$$</p>
+<p>因此 token ratio 可能非常 noisy。</p>
+<hr>
+<h1>14. Routing Replay 是什么？</h1>
+<p>在 GSPO 之前，Qwen 为解决这个问题采用过 <strong>Routing Replay</strong>。</p>
+<p>rollout 时记录：</p>
+<p>$$
+\pi_{\mathrm{old}}
+$$</p>
+<p>每个 token 激活了哪些 experts。</p>
+<p>计算 current policy probability 时，不允许 router 重新选择 experts，而是 replay old routing：</p>
+<p>$$
+\text{route}<em>{\theta}
+\leftarrow
+\text{route}</em>{\theta_{\mathrm{old}}}
+$$</p>
+<p>于是比较：</p>
+<p>$$
+\pi_\theta(y_t)
+$$</p>
+<p>与：</p>
+<p>$$
+\pi_{\mathrm{old}}(y_t)
+$$</p>
+<p>时，两者使用相同的 expert topology。</p>
+<p>这样：</p>
+<p>$$
+w_t =
+\frac{\pi_\theta(y_t)}
+{\pi_{\mathrm{old}}(y_t)}
+$$</p>
+<p>会稳定很多。</p>
+<p>论文实验中，GRPO 在 Qwen 的 MoE setting 下如果去掉 Routing Replay，training reward 明显恶化；加入 Routing Replay 后才可以正常训练。</p>
+<p>但 Routing Replay 有代价：</p>
+<ul>
+<li>rollout 需要额外缓存 routing information；</li>
+<li>增加通信和 memory overhead；</li>
+<li>training pipeline 更复杂；</li>
+<li>current policy 不能完全自由使用当前 router；</li>
+<li>一定程度上限制 MoE 自身动态 routing 的能力。</li>
+</ul>
+<hr>
+<h1>15. GSPO 为什么可以不需要 Routing Replay？</h1>
+<p>因为 GSPO 不关心单个 token：</p>
+<p>$$
+w_t
+$$</p>
+<p>而只关心：</p>
+<p>$$
+s_i =
+\exp
+\left(
+\frac1T\sum_t\log w_t
+\right)
+$$</p>
+<p>单个 token 因为 expert routing change 导致：</p>
+<p>$$
+w_t
+$$</p>
+<p>突然变大或者变小，对整个 sequence 的影响会被 sequence aggregation 稀释。</p>
+<p>例如：</p>
+<p>$$
+w=
+[
+1.00,
+1.01,
+0.99,
+1.02,
+\boxed{1.30},
+1.00,
+0.98,\dots
+]
+$$</p>
+<p>GRPO 会直接让：</p>
+<p>$$
+1.30
+$$</p>
+<p>参与这个 token 的梯度。</p>
+<p>GSPO 使用的是：</p>
+<p>$$
+\exp(\operatorname{mean}\log w_t)
+$$</p>
+<p>如果 sequence 很长，一个 token 的异常值影响相对有限。</p>
+<p>因此：</p>
+<p>$$
+\boxed{
+\text{GSPO 对 individual token likelihood fluctuation 更不敏感}
+}
+$$</p>
+<p>Qwen 的实验显示 GSPO 可以在不使用 Routing Replay 的情况下稳定训练其 MoE 模型。作者将这一点视为 GSPO 对大规模 MoE RL 最重要的优势之一。</p>
+<p>这里同样需要保持表述准确：</p>
+<blockquote>
+<p>实验表明 GSPO 在 Qwen 的 MoE RL setting 中解决了 Routing Replay 依赖；这不等价于已经证明所有 MoE、所有 RL pipeline 都绝不会出现 routing-related instability。</p>
+</blockquote>
+<hr>
+<h1>16. 一个非常反直觉的实验：GSPO Clip 得更多，反而训得更好</h1>
+<p>Qwen 论文里有一个很有意思的结果。</p>
+<p>平均 clipping fraction：</p>
+<p>$$
+\text{GRPO}\approx0.0013
+$$</p>
+<p>而：</p>
+<p>$$
+\text{GSPO}\approx0.15
+$$</p>
+<p>也就是说，GSPO 大约有：</p>
+<p>$$
+15%
+$$</p>
+<p>的 tokens 因为所在 sequence 被 clipping，而 GRPO 只有大约：</p>
+<p>$$
+0.13%
+$$</p>
+<p>的 token 被 clip。</p>
+<p>GSPO clipping 的数据明显更多。</p>
+<p>但实验中 GSPO 的 training efficiency 反而更高。</p>
+<p>作者据此认为：</p>
+<blockquote>
+<p>GRPO 虽然“用了更多 token”，但其中相当一部分 token-level gradient signal 本身非常 noisy；GSPO 丢掉了更多 off-policy sequences，却留下了质量更可靠的 gradient。</p>
+</blockquote>
+<p>所以：</p>
+<p>$$
+\boxed{
+\text{More training tokens}
+\not\Rightarrow
+\text{Better gradient estimation}
+}
+$$</p>
+<p>重要的是：</p>
+<p>$$
+\text{signal quality}
+$$</p>
+<p>而不是单纯 sample utilization。</p>
+<hr>
+<h1>17. GSPO 的 Clip Range 和 GRPO 完全不是一个量级</h1>
+<p>这一点实现时非常重要。</p>
+<p>Qwen 的实验中：</p>
+<p>GSPO 使用 asymmetric clipping：</p>
+<p>$$
+\epsilon_{\mathrm{low}} =
+3\times10^{-4}
+$$</p>
+<p>$$
+\epsilon_{\mathrm{high}} =
+4\times10^{-4}
+$$</p>
+<p>大致就是：</p>
+<p>$$
+s_i
+\in
+[
+1-3\times10^{-4},
+1+4\times10^{-4}
+]
+$$</p>
+<p>而 GRPO 使用：</p>
+<p>$$
+0.2,\quad0.27
+$$</p>
+<p>这种量级。</p>
+<p>不要看到 GSPO 也是 PPO-style clipping，就直接照搬：</p>
+<p>$$
+\epsilon=0.2
+$$</p>
+<p>原因是两种 ratio 根本不是同一个量：</p>
+<p>GRPO：</p>
+<p>$$
+w_t
+$$</p>
+<p>GSPO：</p>
+<p>$$
+s=
+\exp
+\left(
+\operatorname{mean}_t\log w_t
+\right)
+$$</p>
+<p>GSPO 的 sequence-normalized ratio 通常非常接近：</p>
+<p>$$
+1
+$$</p>
+<p>所以 clipping range 会小几个数量级。</p>
+<hr>
+<h1>18. GSPO 完整训练流程</h1>
+<p>对于一个训练 batch：</p>
+<h2>Step 1：采样 Prompt</h2>
+<p>$$
+x\sim\mathcal D
+$$</p>
+<hr>
+<h2>Step 2：Rollout</h2>
+<p>使用：</p>
+<p>$$
+\pi_{\theta_{\mathrm{old}}}
+$$</p>
+<p>对同一个 prompt 生成 $(G)$ 条 response：</p>
+<p>$$
+y_1,\dots,y_G
+$$</p>
+<hr>
+<h2>Step 3：计算 Reward</h2>
+<p>例如数学 RLVR：</p>
+<p>$$
+r_i =
+\mathbb{1}[\text{answer correct}]
+$$</p>
+<p>或者：</p>
+<p>$$
+r_i =
+r_{\mathrm{correct}} +
+r_{\mathrm{format}}
++\cdots
+$$</p>
+<hr>
+<h2>Step 4：计算 Group Advantage</h2>
+<p>$$
+\mu_r =
+\frac1G
+\sum_i r_i
+$$</p>
+<p>$$
+\sigma_r =
+\operatorname{std}(r_1,\dots,r_G)
+$$</p>
+<p>$$
+\hat A_i =
+\frac{r_i-\mu_r}{\sigma_r}
+$$</p>
+<p>实践实现中还需要处理：</p>
+<p>$$
+\sigma_r=0
+$$</p>
+<p>的 degenerate group，例如所有 response 都正确或者全部错误。</p>
+<hr>
+<h2>Step 5：记录 Old-policy Log Probabilities</h2>
+<p>对于每个 token：</p>
+<p>$$
+\log p_{i,t}^{old} =
+\log
+\pi_{\theta_{\mathrm{old}}}
+(y_{i,t}|x,y_{i,&lt;t})
+$$</p>
+<hr>
+<h2>Step 6：Current Policy Forward</h2>
+<p>计算：</p>
+<p>$$
+\log p_{i,t}^{new} =
+\log
+\pi_\theta
+(y_{i,t}|x,y_{i,&lt;t})
+$$</p>
+<hr>
+<h2>Step 7：计算 Sequence Log Ratio</h2>
+<p>$$
+\Delta_{i,t} =
+\log p_{i,t}^{new}
+\log p_{i,t}^{old}
+$$</p>
+<p>然后：</p>
+<p>$$
+\log s_i =
+\frac1{T_i}
+\sum_t
+\Delta_{i,t}
+$$</p>
+<hr>
+<h2>Step 8：Exponentiate</h2>
+<p>$$
+s_i =
+\exp(\log s_i)
+$$</p>
+<hr>
+<h2>Step 9：Sequence-level Clipping</h2>
+<p>$$
+L_i =
+\min
+\left(
+s_i\hat A_i,
+\operatorname{clip}
+(s_i,1-\epsilon_l,1+\epsilon_h)
+\hat A_i
+\right)
+$$</p>
+<hr>
+<h2>Step 10：Aggregate</h2>
+<p>$$
+J =
+\frac1G
+\sum_iL_i
+$$</p>
+<p>训练代码通常写成需要 minimize 的 loss：</p>
+<p>$$
+\boxed{
+L_{\mathrm{GSPO}} =
+-J_{\mathrm{GSPO}}
+}
+$$</p>
+<hr>
+<h2>Step 11：Backpropagation</h2>
+<p>因为：</p>
+<p>$$
+s_i =
+\exp
+\left(
+\frac1T
+\sum_t\log\pi_\theta(y_t|\cdots)
+-\text{constant}
+\right)
+$$</p>
+<p>gradient 会自动传回每个 response token。</p>
+<p>然后：</p>
+<p>$$
+\theta
+\leftarrow
+\theta+\eta\nabla_\theta J
+$$</p>
+<p>完成 policy update。</p>
+<hr>
+<h1>19. 用伪代码看 GSPO</h1>
+<pre><code class="language-python">for prompts in dataloader:
+
+    # -------------------------------------------------
+    # 1. rollout with old policy
+    # -------------------------------------------------
+    responses = rollout(
+        policy_old,
+        prompts,
+        num_generations=G,
+    )
+
+    # -------------------------------------------------
+    # 2. rewards
+    # -------------------------------------------------
+    rewards = verifier(prompts, responses)
+
+    # -------------------------------------------------
+    # 3. group-relative advantages
+    # -------------------------------------------------
+    advantages = group_normalize(rewards)
+
+    # -------------------------------------------------
+    # 4. old log probs
+    # -------------------------------------------------
+    with torch.no_grad():
+        old_logp = policy_old.log_probs(
+            prompts,
+            responses,
+        )
+
+    # -------------------------------------------------
+    # 5. current log probs
+    # -------------------------------------------------
+    new_logp = policy.log_probs(
+        prompts,
+        responses,
+    )
+
+    # [B, T]
+    token_log_ratio = new_logp - old_logp
+
+    # -------------------------------------------------
+    # 6. sequence-level ratio
+    # -------------------------------------------------
+    seq_log_ratio = masked_mean(
+        token_log_ratio,
+        response_mask,
+        dim=-1,
+    )
+
+    seq_ratio = torch.exp(seq_log_ratio)
+
+    # -------------------------------------------------
+    # 7. GSPO clipping
+    # -------------------------------------------------
+    unclipped = seq_ratio * advantages
+
+    clipped_ratio = torch.clamp(
+        seq_ratio,
+        1 - eps_low,
+        1 + eps_high,
+    )
+
+    clipped = clipped_ratio * advantages
+
+    objective = torch.minimum(
+        unclipped,
+        clipped,
+    )
+
+    # -------------------------------------------------
+    # 8. optimize
+    # -------------------------------------------------
+    loss = -objective.mean()
+
+    loss.backward()
+    optimizer.step()
+</code></pre>
+<p>从实现层面看，GSPO 与 GRPO 的区别实际上非常集中：</p>
+<p>GRPO：</p>
+<pre><code class="language-python">ratio = exp(new_logp - old_logp)   # [B, T]
+</code></pre>
+<p>然后 token-wise clip。</p>
+<p>GSPO：</p>
+<pre><code class="language-python">log_ratio = new_logp - old_logp
+seq_log_ratio = mean(log_ratio, dim=response_tokens)
+ratio = exp(seq_log_ratio)         # [B]
+</code></pre>
+<p>然后 sequence-wise clip。</p>
+<hr>
+<h1>20. GSPO 并没有改变 Group Relative Advantage</h1>
+<p>这一点很容易混淆。</p>
+<p>GSPO 并不是：</p>
+<blockquote>
+<p>“把 GRPO 完全重新设计了一遍。”</p>
+</blockquote>
+<p>实际上 GSPO 仍然保留：</p>
+<p>$$
+G\text{ responses / prompt}
+$$</p>
+<p>以及：</p>
+<p>$$
+\hat A_i =
+\frac{r_i-\mu_r}{\sigma_r}
+$$</p>
+<p>所以：</p>
+<p>$$
+\boxed{
+\textbf{Group}
+}
+$$</p>
+<p>这个部分基本继承自 GRPO。</p>
+<p>GSPO 真正改变的是：</p>
+<p>$$
+\boxed{
+\textbf{Sequence}
+}
+$$</p>
+<p>也就是：</p>
+<ul>
+<li>sequence likelihood ratio；</li>
+<li>sequence clipping；</li>
+<li>sequence optimization weighting。</li>
+</ul>
+<p>所以它的名字非常准确：</p>
+<p>$$
+\boxed{
+\underbrace{\text{Group}}<em>{\text{GRPO-style advantage}} +
+\underbrace{\text{Sequence}}</em>{\text{sequence importance ratio}} +
+\underbrace{\text{Policy Optimization}}_{\text{PPO-style clipped objective}}
+}
+$$</p>
+<hr>
+<h1>21. PPO、GRPO、GSPO 的核心对比</h1>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>PPO</th>
+<th>GRPO</th>
+<th>GSPO</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Multiple responses/group</td>
+<td>不要求</td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td>Value Model</td>
+<td><strong>需要</strong></td>
+<td><strong>不需要</strong></td>
+<td><strong>不需要</strong></td>
+</tr>
+<tr>
+<td>Advantage</td>
+<td>token/state level</td>
+<td>sequence group advantage</td>
+<td>sequence group advantage</td>
+</tr>
+<tr>
+<td>Reward granularity</td>
+<td>sequence / process</td>
+<td>通常 sequence</td>
+<td>通常 sequence</td>
+</tr>
+<tr>
+<td>Importance ratio</td>
+<td>token</td>
+<td>token</td>
+<td><strong>sequence</strong></td>
+</tr>
+<tr>
+<td>Ratio</td>
+<td>$w_t$</td>
+<td>$w_{i,t}$</td>
+<td>$s_i$</td>
+</tr>
+<tr>
+<td>Clipping</td>
+<td>token</td>
+<td>token</td>
+<td><strong>sequence</strong></td>
+</tr>
+<tr>
+<td>同 sequence token gradient weight</td>
+<td>不同</td>
+<td>不同</td>
+<td><strong>相同</strong></td>
+</tr>
+<tr>
+<td>Long-CoT stability</td>
+<td>—</td>
+<td>较容易出现 ratio noise</td>
+<td>更稳定</td>
+</tr>
+<tr>
+<td>MoE routing sensitivity</td>
+<td>—</td>
+<td>高</td>
+<td><strong>明显降低</strong></td>
+</tr>
+<tr>
+<td>Routing Replay</td>
+<td>—</td>
+<td>Qwen MoE 中需要</td>
+<td><strong>不需要</strong></td>
+</tr>
+<tr>
+<td>Critic overhead</td>
+<td>高</td>
+<td>无</td>
+<td>无</td>
+</tr>
+</tbody></table>
+<p>因此最简洁的关系是：</p>
+<p>$$
+\boxed{
+\text{GRPO} =
+\text{Group Advantage} +
+\text{Token Ratio}
+}
+$$</p>
+<p>而：</p>
+<p>$$
+\boxed{
+\text{GSPO} =
+\text{Group Advantage} +
+\text{Sequence Ratio}
+}
+$$</p>
+<hr>
+<h1>22. GSPO-token 是什么？</h1>
+<p>GSPO 论文还提出了一个变体：</p>
+<p>$$
+\boxed{\text{GSPO-token}}
+$$</p>
+<p>为什么还需要 token variant？</p>
+<p>因为有些任务并不是只有 sequence-level credit。</p>
+<p>例如 multi-turn agent：</p>
+<pre><code class="language-text">Think
+Action
+Observation
+Think
+Action
+Observation
+...
+</code></pre>
+<p>可能希望：</p>
+<p>$$
+A_{i,t}
+$$</p>
+<p>在不同 token 或不同阶段上不同。</p>
+<p>普通 GSPO：</p>
+<p>$$
+A_{i,t}=A_i
+$$</p>
+<p>所有 token 完全共享一个 advantage。</p>
+<p>GSPO-token 为此定义：</p>
+<p>$$
+s_{i,t}(\theta) =
+\operatorname{sg}[s_i(\theta)]
+\cdot
+\frac{
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+}{
+\operatorname{sg}
+[
+\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+]
+}
+$$</p>
+<p>其中：</p>
+<p>$$
+\operatorname{sg}[\cdot]
+$$</p>
+<p>表示 stop-gradient / detach。</p>
+<p>注意：</p>
+<p>$$
+\frac{
+\pi_\theta
+}{
+\operatorname{sg}[\pi_\theta]
+}
+$$</p>
+<p>在数值上永远是：</p>
+<p>$$
+1
+$$</p>
+<p>因此：</p>
+<p>$$
+s_{i,t}
+$$</p>
+<p><strong>numerically 等于</strong>：</p>
+<p>$$
+s_i
+$$</p>
+<p>但 gradient 可以从对应 token 的：</p>
+<p>$$
+\pi_\theta(y_{i,t})
+$$</p>
+<p>向后传播。</p>
+<p>于是 GSPO-token 可以使用：</p>
+<p>$$
+A_{i,t}
+$$</p>
+<p>而不是：</p>
+<p>$$
+A_i
+$$</p>
+<p>从而实现更细粒度 credit assignment。</p>
+<p>如果设置：</p>
+<p>$$
+A_{i,t}=A_i
+$$</p>
+<p>论文证明 GSPO-token 与普通 GSPO 在：</p>
+<ul>
+<li>objective numerical value；</li>
+<li>clipping condition；</li>
+<li>theoretical gradient；</li>
+</ul>
+<p>上都是等价的。</p>
+<hr>
+<h1>23. GSPO 对 RL Infrastructure 的潜在意义</h1>
+<p>现代 LLM RL 经常是：</p>
+<pre><code class="language-text">Inference Engine
+    ↓ rollout
+SGLang / vLLM
+    ↓
+Training Engine
+Megatron / FSDP / ...
+</code></pre>
+<p>问题是 inference engine 与 training engine 之间可能存在：</p>
+<ul>
+<li>BF16 / FP8 difference；</li>
+<li>kernel difference；</li>
+<li>tensor parallel implementation difference；</li>
+<li>MoE routing difference；</li>
+<li>numerical precision difference。</li>
+</ul>
+<p>于是：</p>
+<p>$$
+\log p_{\mathrm{inference}}
+$$</p>
+<p>和：</p>
+<p>$$
+\log p_{\mathrm{training}}
+$$</p>
+<p>可能存在微小偏差。</p>
+<p>对于 GRPO：</p>
+<p>$$
+w_t =
+\exp(
+\log p_t^{new} -
+\log p_t^{old}
+)
+$$</p>
+<p>每一个 token 的微小误差都会直接进入：</p>
+<p>$$
+w_t
+$$</p>
+<p>甚至改变 token 是否被 clipping。</p>
+<p>因此很多 RL infrastructure 会：</p>
+<blockquote>
+<p>rollout engine 负责生成，但 training engine 再 recompute 一次 old log probabilities。</p>
+</blockquote>
+<p>GSPO 使用：</p>
+<p>$$
+\frac1T
+\sum_t
+(\log p_t^{new}-\log p_t^{old})
+$$</p>
+<p>单 token numerical mismatch 会被 sequence aggregation 平滑，因此 Qwen 认为 GSPO 对 inference/training engine 的 probability discrepancy 更 tolerant，有可能直接使用 inference engine 返回的 likelihood，而不再由 training engine recompute。</p>
+<p>论文对此使用的是“makes it possible / potential”式表述，因此更准确的理解是：</p>
+<p>$$
+\boxed{
+\text{GSPO 有潜力简化 rollout-training probability synchronization}
+}
+$$</p>
+<p>而不是：</p>
+<blockquote>
+<p>“GSPO 已经证明 old-logprob recomputation 永远都不需要。”</p>
+</blockquote>
+<hr>
+<h1>24. Qwen 的实验结果</h1>
+<p>原论文主要使用：</p>
+<p>$$
+\text{Qwen3-30B-A3B-Base}
+$$</p>
+<p>构造 cold-start RL model。</p>
+<p>评测包括：</p>
+<ul>
+<li>AIME 2024；</li>
+<li>LiveCodeBench；</li>
+<li>CodeForces。</li>
+</ul>
+<p>在相同 training compute 和 query consumption 下，GSPO 的 reward、AIME、LiveCodeBench 和 CodeForces performance curves 整体高于 GRPO + Routing Replay。</p>
+<p>Qwen 同时表示 GSPO 被应用到了后续 Qwen3 系列模型的 RL 训练中。</p>
+<p>不过原始 GSPO paper 本身只有 7 页，其 empirical evidence 主要集中在 Qwen 自己的大规模 MoE setting，因此不能从这篇论文单独推出：</p>
+<p>$$
+\text{GSPO 在所有 dense / MoE / task / scale 上都优于 GRPO}
+$$</p>
+<p>更准确的结论应该是：</p>
+<blockquote>
+<p>在 Qwen 报告的大规模长序列 MoE RL setting 中，GSPO 展现出了明显的稳定性和效率优势。</p>
+</blockquote>
+<hr>
+<h1>25. GSPO 的局限</h1>
+<p>GSPO 解决 GRPO 问题的方法非常直接：</p>
+<p>$$
+\boxed{
+\text{不要相信单 token ratio，直接看整个 sequence}
+}
+$$</p>
+<p>但这样也产生了另一端的问题：</p>
+<h2>25.1 一个坏 token 可能导致整条 sequence 被 clip</h2>
+<p>假设 sequence 大部分 token 很正常：</p>
+<p>$$
+w_t\approx1
+$$</p>
+<p>但存在几个 extreme token。</p>
+<p>这些 token 会影响：</p>
+<p>$$
+s_i =
+\exp(\operatorname{mean}\log w_t)
+$$</p>
+<p>一旦：</p>
+<p>$$
+s_i
+$$</p>
+<p>越过 clipping boundary：</p>
+<p>$$
+\boxed{\text{整条 response 都停止贡献相应 gradient}}
+$$</p>
+<p>而不是只 clip problematic tokens。</p>
+<p>因此 GSPO 的 sequence coherence 很强，但 credit assignment 比 token-level 方法粗。</p>
+<hr>
+<h1>26. 这也是后来 SAPO、SSPO 等方法继续改 GSPO 的原因</h1>
+<p>截至 2026 年，GSPO 已经不是这一方向的终点。</p>
+<p>Qwen 团队成员随后提出 <strong>SAPO（Soft Adaptive Policy Optimization）</strong>，明确指出 GSPO 的 hard sequence clipping 存在这样的 trade-off：</p>
+<blockquote>
+<p>当 sequence 中只有少量 token 非常 off-policy 时，GSPO 可能 suppress 整个 sequence 的 gradient。</p>
+</blockquote>
+<p>SAPO 因此尝试做到：</p>
+<p>$$
+\boxed{
+\text{sequence coherence} +
+\text{token adaptivity}
+}
+$$</p>
+<p>通过 soft gating 而不是 GSPO 的 hard clipping，在保留 sequence-level stability 的同时尽量保留有效 token 的 gradient。</p>
+<p>另一条路线是 <strong>SSPO（Subsentence-level Policy Optimization）</strong>，将 optimization granularity 设在：</p>
+<p>$$
+\text{token}
+&lt;
+\boxed{\text{subsentence}}
+&lt;
+\text{sequence}
+$$</p>
+<p>希望在 GRPO 和 GSPO 两种极端之间取得平衡。SSPO 作者的实验同样指出，GSPO 的整条 sequence clipping 可能降低 sampled data utilization。</p>
+<p>因此从今天看，GSPO 真正重要的贡献可能并不只是某个具体 loss，而是提出了一个更一般的问题：</p>
+<p>$$
+\boxed{
+\text{LLM RL 的 optimization granularity 应该是什么？}
+}
+$$</p>
+<p>可以是：</p>
+<p>$$
+\text{Token}
+$$</p>
+<p>也可以是：</p>
+<p>$$
+\text{Subsentence}
+$$</p>
+<p>或者：</p>
+<p>$$
+\text{Reasoning Step}
+$$</p>
+<p>或者：</p>
+<p>$$
+\text{Think-Action}
+$$</p>
+<p>或者：</p>
+<p>$$
+\text{Whole Sequence}
+$$</p>
+<p>这已经成为后续很多 RLVR / Agent RL 工作继续探索的设计维度。</p>
+<hr>
+<h1>27. 应该怎样真正理解 GSPO？</h1>
+<p>如果已经理解 PPO 和 GRPO，可以把 GSPO 压缩成下面这一条逻辑链。</p>
+<p>GRPO：</p>
+<p>$$
+r(x,y)
+$$</p>
+<p>产生：</p>
+<p>$$
+A(y)
+$$</p>
+<p>但是 optimization 使用：</p>
+<p>$$
+w_t =
+\frac{\pi_\theta(y_t|y_{&lt;t})}
+{\pi_{\mathrm{old}}(y_t|y_{&lt;t})}
+$$</p>
+<p>于是：</p>
+<p>$$
+\nabla J_{\mathrm{GRPO}}
+\sim
+A(y)
+\sum_t
+w_t
+\nabla\log\pi_\theta(y_t|y_{&lt;t})
+$$</p>
+<p>GSPO 认为这里存在：</p>
+<p>$$
+\boxed{
+\text{Reward granularity}
+\neq
+\text{Importance-weight granularity}
+}
+$$</p>
+<p>于是将：</p>
+<p>$$
+w_t
+$$</p>
+<p>替换成：</p>
+<p>$$
+s(y) =
+\left(
+\frac{\pi_\theta(y|x)}
+{\pi_{\mathrm{old}}(y|x)}
+\right)^{1/T}
+$$</p>
+<p>得到：</p>
+<p>$$
+\nabla J_{\mathrm{GSPO}}
+\sim
+s(y)A(y)
+\frac1T
+\sum_t
+\nabla\log\pi_\theta(y_t|y_{&lt;t})
+$$</p>
+<p>于是：</p>
+<p>$$
+\boxed{
+\text{Reward}
+\rightarrow
+\text{Advantage}
+\rightarrow
+\text{Importance Ratio}
+\rightarrow
+\text{Clipping}
+}
+$$</p>
+<p>全部围绕：</p>
+<p>$$
+\boxed{\text{sequence}}
+$$</p>
+<p>这就是 GSPO 的核心。</p>
+<hr>
+<h1>28. 一张公式图记住 GSPO</h1>
+<p>$$
+\boxed{
+x
+\overset{\pi_{\theta_{\mathrm{old}}}}{\longrightarrow}
+{y_1,\dots,y_G}
+}
+$$</p>
+<p>得到：</p>
+<p>$$
+\boxed{
+r_1,\dots,r_G
+}
+$$</p>
+<p>计算：</p>
+<p>$$
+\boxed{
+A_i =
+\frac{r_i-\mu_r}{\sigma_r}
+}
+$$</p>
+<p>然后对每条 sequence：</p>
+<p>$$
+\boxed{
+\log s_i =
+\frac1{|y_i|}
+\sum_t
+\left(
+\log\pi_\theta(y_{i,t}) -
+\log\pi_{\mathrm{old}}(y_{i,t})
+\right)
+}
+$$</p>
+<p>$$
+\boxed{
+s_i=e^{\log s_i}
+}
+$$</p>
+<p>最后：</p>
+<p>$$
+\boxed{
+J_{\mathrm{GSPO}} =
+\frac1G
+\sum_i
+\min
+\left(
+s_iA_i,
+\operatorname{clip}(s_i)A_i
+\right)
+}
+$$</p>
+<p>其 gradient：</p>
+<p>$$
+\boxed{
+\nabla J_{\mathrm{GSPO}}
+\propto
+\frac1G
+\sum_i
+s_iA_i
+\frac1{|y_i|}
+\sum_t
+\nabla\log\pi_\theta(y_{i,t}|x,y_{i,&lt;t})
+}
+$$</p>
+<p>与 GRPO 唯一最关键的对比：</p>
+<p>$$
+\boxed{
+\underbrace{w_{i,t}}<em>{\text{GRPO: token-specific}}
+\quad\longrightarrow\quad
+\underbrace{s_i}</em>{\text{GSPO: sequence-shared}}
+}
+$$</p>
+<p>如果只记住 GSPO 的一个公式和一个思想，就记这一行。</p>
+]]></content>
+        <author>
+            <name>wzh</name>
+            <email>3350782760@qq.com</email>
+            <uri>https://wangzh12023.github.io/blog</uri>
+        </author>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PPTAgent 与 DeepPresenter：论文讲解、代码解析与 Agent Harness 架构]]></title>
+        <id>https://wangzh12023.github.io/blog/blog/pptagent-deeppresenter</id>
+        <link href="https://wangzh12023.github.io/blog/blog/pptagent-deeppresenter"/>
+        <updated>2026-08-15T00:00:00.000Z</updated>
+        <summary type="html"><![CDATA[系统讲解 PPTAgent 与 DeepPresenter 的生成流程、评测体系、Agent Harness 主循环和框架架构。]]></summary>
+        <content type="html"><![CDATA[<blockquote>
+<p>本文结合 <code>paper/</code> 目录下的两篇论文（<code>2501.03936.pdf</code> — PPTAgent，<code>2602.22839.pdf</code> — DeepPresenter）、<code>PPTAgent/</code> 仓库代码（<code>pptagent/</code> 旧版核心库 + <code>deeppresenter/</code> 当前运行时）以及 <code>PPTea-main/</code> 评测/实验代码，对两代系统的生成流程、评测流程、Agent Harness 主循环与框架架构进行系统讲解，并与&quot;直接让 CodeX/LLM 生成 PPT&quot;的方式做对比。</p>
+</blockquote>
+<h2>1. 项目背景与两代系统总览</h2>
+<p>仓库 <code>PPTAgent/</code>（<a href="https://github.com/icip-cas/PPTAgent%EF%BC%89%E5%8C%85%E5%90%AB%E4%B8%A4%E4%BB%A3%E8%AE%BA%E6%96%87%E7%9A%84%E5%AE%8C%E6%95%B4%E4%BB%A3%E7%A0%81%EF%BC%9A">https://github.com/icip-cas/PPTAgent）包含两代论文的完整代码：</a></p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th><strong>PPTAgent</strong></th>
+<th><strong>DeepPresenter</strong></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>论文</td>
+<td>&quot;PPTAgent: Generating and Evaluating Presentations Beyond Text-to-Slides&quot;（EMNLP 2025）</td>
+<td>&quot;DeepPresenter: Environment-Grounded Reflection for Agentic Presentation Generation&quot;（ACL 2026）</td>
+</tr>
+<tr>
+<td>arXiv 编号</td>
+<td>2501.03936</td>
+<td>2602.22839</td>
+</tr>
+<tr>
+<td>核心思想</td>
+<td><strong>两阶段、基于编辑</strong>（edit-based）：先分析参考演示文稿提取布局与模式，再通过编辑动作修改参考幻灯片</td>
+<td><strong>双智能体 + 环境接地反思</strong>：Researcher 自主调研写文稿，Presenter 自由式设计 HTML 幻灯片，通过 <code>inspect</code> 观察渲染产物进行反思修正</td>
+</tr>
+<tr>
+<td>生成范式</td>
+<td>模板复用/编辑式：在已有 PPTX 参考模板上执行编辑 API</td>
+<td>自由式（free-form）：从零写 HTML/CSS，渲染为图片再转 PPTX</td>
+</tr>
+<tr>
+<td>依赖</td>
+<td>参考演示文稿（reference presentation）+ 输入文档</td>
+<td>用户指令 +（可选附件）+ 网络检索 + 工具环境</td>
+</tr>
+<tr>
+<td>角色</td>
+<td>planner / content_organizer / layout_selector / editor / coder / schema_extractor</td>
+<td>Researcher（调研+文稿）、Presenter（视觉设计），可选 Planner、SubAgent</td>
+</tr>
+<tr>
+<td>评测</td>
+<td>PPTEval：Content / Design / Coherence 三维度（MLLM-as-a-judge）</td>
+<td>Constraint（规则验证）/ Content / Style 三维度 + Diversity（Vendi Score），GPT-5 作为 judge</td>
+</tr>
+<tr>
+<td>对应代码</td>
+<td><code>pptagent/</code>（旧版核心库）</td>
+<td><code>deeppresenter/</code>（当前运行时）+ <code>PPTea-main/sarl/</code>（评测）</td>
+</tr>
+</tbody></table>
+<p><strong>时间线关系</strong>：PPTAgent 是 2025 年 1 月开源的初代系统（基于编辑 API 的两阶段方案）；DeepPresenter 是 2025 年 12 月发布的重构版（&quot;Agentic&quot; 方案），保留了 <code>pptagent</code> 作为 MCP server（<code>pptagent-mcp</code>）供新系统调用。<code>deeppresenter/</code> 是当前的主产品面，<code>pptagent/</code> 是仍在包内、但主要用于 MCP server 入口的旧核心库。</p>
+<hr>
+<h2>2. PPTAgent：两阶段编辑式生成</h2>
+<h3>2.1 问题定义与核心思想</h3>
+<p><strong>传统范式（text-to-slides）</strong> 把生成演示文稿当作&quot;从文档做抽象式摘要&quot;，用预定义规则或模板把 LLM 输出转成幻灯片：</p>
+<pre><code>S = {e1, e2, ..., en} = f(C)        （公式 1：从内容 C 生成 n 个幻灯片元素）
+</code></pre>
+<p>其中每个元素要手动指定类型、内容、样式属性（如 <code>(Textbox, &quot;Hello&quot;, {border, size, position...})</code>）。这种方式的缺陷：</p>
+<ul>
+<li>需要手工指定样式属性，自动化困难；</li>
+<li>输出文本密集、版式单调（图 1 右侧：Content: Tedious Text / Design: Boring layout / Coherence: Abrupt Start）。</li>
+</ul>
+<p><strong>PPTAgent 的核心洞察</strong>：人类制作 PPT 的流程通常是——<strong>挑选优秀的示例幻灯片作为参考，然后把关键内容总结并迁移到这些参考幻灯片上</strong>（Duarte, 2010）。因此 PPTAgent 把幻灯片生成分解为：</p>
+<pre><code>A = {a1, a2, ..., am} = g(C, Rj)    （公式 2：给定内容 C 与第 j 个参考幻灯片 Rj，生成 m 个可执行编辑动作）
+</code></pre>
+<p>即：<strong>不是从零创建幻灯片，而是在参考幻灯片上执行一系列可执行的编辑动作</strong>（如 replace_span、replace_image 等），从而保留参考幻灯片精心设计的版式与风格。</p>
+<p>论文的三大贡献：</p>
+<ol>
+<li><strong>PPTAgent</strong>：把自动演示文稿生成重新定义为&quot;以参考演示文稿为引导的编辑式过程&quot;；</li>
+<li><strong>PPTEval</strong>：三维度（Content / Design / Coherence）的评测框架；</li>
+<li>发布 <strong>Zenodo10K</strong> 数据集（从 Zenodo 爬取的 10,448 份跨领域演示文稿）。</li>
+</ol>
+<h3>2.2 Stage I：Presentation Analysis（演示文稿分析）</h3>
+<p>对应代码：<code>pptagent/induct.py</code>（<code>SlideInducter</code> 类）与 <code>pptagent/model_utils.py</code>（聚类算法）。</p>
+<p>目标：分析参考演示文稿，提取<strong>幻灯片的版面类型（functional type）与内容模式（content schema）</strong>，为后续的参考选择与幻灯片生成提供指导。</p>
+<h4>Step 1：幻灯片分类（Slide Clustering）</h4>
+<p>幻灯片按功能分为两类：</p>
+<ul>
+<li><strong>结构型幻灯片（structural slides）</strong>：支撑演示文稿组织的（如开场、目录、章节页、结尾）；</li>
+<li><strong>内容型幻灯片（content slides）</strong>：传达具体信息的（如要点页）。</li>
+</ul>
+<p>分类方法（论文 2.2 节）：</p>
+<ul>
+<li><strong>结构型</strong>：用 LLM 的长上下文能力分析整份演示文稿的文本，识别结构型幻灯片、标注其结构角色（Opening / TOC / Section Outline / Ending）并按功能分组。对应 <code>induct.py</code> 的 <code>category_split()</code>（<code>induct.py:95-110</code>），使用 <code>prompts/category_split.txt</code>，输出 <code>functional_cluster</code>（类别 → 幻灯片索引列表）与 <code>content_slides_index</code>。</li>
+<li><strong>内容型</strong>：把幻灯片转成图片，用 ViT 做分层聚类（hierarchical clustering）把相似版面聚到一起。对应 <code>layout_split()</code>（<code>induct.py:112-151</code>）：<ol>
+<li>用 ViT（<code>google/vit-base-patch16-224-in21k</code>）对模板图片提取 embedding（<code>get_image_embedding()</code>）；</li>
+<li>按 <code>(layout_name, content_type)</code>（text/image）预分组；</li>
+<li>组内两两计算余弦相似度（<code>images_cosine_similarity()</code>）；</li>
+<li>用贪婪聚合聚类 <code>get_cluster()</code>（<code>model_utils.py:291-345</code>）聚类，相似度阈值 <code>sim_bound=0.65</code>（论文 Algorithm 1）——聚类前把文本替换为占位符 &quot;a&quot;、图片替换为纯色背景以只关注版面；</li>
+<li>每簇选 shape 最多的幻灯片作为模板幻灯片；</li>
+<li>用视觉模型（<code>ASK_CATEGORY_PROMPT</code>）生成一行版面模式描述（如 &quot;One Large Left-Aligned Image with a Right-Aligned Text Block&quot;），并追加 <code>:text</code> 或 <code>:image</code> 后缀。</li>
+</ol>
+</li>
+</ul>
+<h4>Step 2：Schema 提取（Schema Extraction）</h4>
+<p>对每个版面，取其模板幻灯片，提取所有段落文本与图片描述，调用 <code>schema_extractor</code> 智能体生成结构化 JSON schema（<code>content_induct()</code>，<code>induct.py:175-208</code>）。每个元素用 <code>(category, description, content)</code> 表示，例如：</p>
+<pre><code>Category   Description              Data
+Title      Main title               Sample Library
+Date       Date of the event        15 February 2018
+Image      Primary image to          Picture: Children in a li-
+           illustrate the slide     brary with ...
+</code></pre>
+<p>对应数据模型：<code>pptagent/presentation/layout.py</code> 中的 <code>Element</code>（name/data/type/suggested_characters/variable_length）与 <code>Layout</code>。Stage I 的最终产物是 <code>slide_induction.json</code>（见 <code>scripts/template_induct.py</code> 与 <code>templates/*/slide_induction.json</code>），包含每个版式的 elements、template_id、slides、functional_keys 与语言检测结果。</p>
+<h3>2.3 Stage II：Presentation Generation（演示文稿生成）</h3>
+<p>对应代码：<code>pptagent/pptgen.py</code>（<code>PPTGen</code> 抽象基类与 <code>PPTAgent</code> 具体实现）。</p>
+<h4>Step 1：大纲生成（Outline Generation）</h4>
+<p>用 LLM 生成结构化大纲（<code>generate_outline()</code>，<code>pptgen.py:239-256</code>），每个条目对应一张新幻灯片，包含：<strong>参考幻灯片（基于 Stage I 的功能描述选择）+ 该幻灯片相关的文档内容</strong>。大纲以结构化输出（<code>Outline.response_model(source_doc)</code>，见 <code>response/outline.py</code>）生成。</p>
+<p>随后 <code>_add_functional_layouts()</code>（<code>pptgen.py:267-318</code>）自动插入结构型幻灯片：</p>
+<ul>
+<li>TOC（目录）与 Opening（开场）插在位置 0；</li>
+<li>Ending（结尾）插在最后；</li>
+<li>每个新主题章节前插入 Section Outline（章节页）；</li>
+<li>用 <code>edit_distance</code> 模糊匹配参考稿中对应的功能版式名。</li>
+</ul>
+<h4>Step 2：幻灯片生成（Slide Generation）——编辑式流水线</h4>
+<p><code>generate_slide()</code>（<code>pptgen.py:392-432</code>）对大纲中的每个条目执行：</p>
+<ol>
+<li><p><strong>选择版面</strong> <code>_select_layout()</code>（<code>pptgen.py:434-467</code>）：先用 <code>content_organizer</code> 从检索内容中提取关键点，再由 <code>layout_selector</code> 根据内容与图片匹配情况选择最佳版式（<code>LayoutChoice.response_model(layouts)</code> 结构化输出），文本内容选 <code>:text</code> 版式、含图片的选 <code>:image</code> 版式。</p>
+</li>
+<li><p><strong>生成内容</strong> <code>_generate_content()</code>（<code>pptgen.py:469-491</code>）：<code>editor</code> 智能体按照 schema 生成结构化内容（<code>EditorOutput.response_model(elements)</code>），再经 <code>_validate_content()</code>（<code>pptgen.py:531-571</code>）校验（图片是否存在、字符数是否超限，超长文本用 <code>length_rewrite()</code> 改写），最后 <code>_generate_commands()</code>（<code>pptgen.py:573-589</code>）把内容差异转成命令序列：对每个元素计算 <code>quantity_change = len(new) - len(old)</code>，产出 <code>(element_name, type, quantity_change, old_data, new_data)</code> 命令元组。</p>
+</li>
+<li><p><strong>编辑幻灯片</strong> <code>_edit_slide()</code>（<code>pptgen.py:493-529</code>）：这是<strong>自校正 REPL 循环</strong>——</p>
+<ul>
+<li><code>coder</code> 智能体依据 API 文档（<code>CodeExecutor.get_apis_docs()</code> 内省 API 签名生成）与模板幻灯片的 HTML 表示，把命令翻译成 API 调用序列；</li>
+<li><code>CodeExecutor.execute_actions()</code>（<code>apis.py:127-203</code>）用 <code>eval(line, SAFE_EVAL_GLOBALS, ...)</code> 逐行执行 API 调用（<code>replace_paragraph</code>、<code>replace_image</code>、<code>del_paragraph</code>、<code>del_image</code>、<code>clone_paragraph</code>），出错则返回 <code>(api_lines, traceback)</code> 作为反馈；</li>
+<li>LLM 分析反馈修正动作，最多重试 <code>retry_times</code>（默认 3）次，直到生成有效幻灯片。</li>
+</ul>
+</li>
+</ol>
+<h4>编辑 API 与 HTML 渲染（CodeRender）</h4>
+<p>论文的关键设计之一：<strong>把参考幻灯片渲染成 HTML 表示</strong>（<code>SlidePage.to_html()</code>，<code>presentation.py:193-216</code>），比直接操作 PPTX 的 XML（1006 行冗长冗余，见论文 Figure 11）更精确直观，让 LLM 能理解元素结构并精确修改。</p>
+<p>五个编辑 API（<code>pptagent/apis.py</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>API</th>
+<th>说明</th>
+<th>实现位置</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>replace_paragraph</code></td>
+<td>替换段落内容（markdown→HTML→TextBlock 富文本解析）</td>
+<td><code>apis.py:403-438</code></td>
+</tr>
+<tr>
+<td><code>replace_image</code></td>
+<td>替换图片资源（等比缩放居中，表格图片转真表格）</td>
+<td><code>apis.py:441-473</code></td>
+</tr>
+<tr>
+<td><code>del_paragraph</code></td>
+<td>删除段落</td>
+<td><code>apis.py:357-384</code></td>
+</tr>
+<tr>
+<td><code>del_image</code></td>
+<td>删除图片元素</td>
+<td><code>apis.py:387-400</code></td>
+</tr>
+<tr>
+<td><code>clone_paragraph</code></td>
+<td>复制段落（插入 XML 到末段之后）</td>
+<td><code>apis.py:476-512</code></td>
+</tr>
+</tbody></table>
+<p><strong>Closure 模式</strong>：编辑动作不直接应用到 PPTX，而是修改 <code>SlidePage</code> 表示并排队 <code>Closure</code> 对象（<code>shapes.py:218-246</code>），<code>SlidePage.build()</code> 时按 CLONE → REPLACE/STYLE → DELETE/POST_PROCESS → MERGE 的顺序执行（<code>shapes.py:622-642</code>）。这保证了删除段落时索引处理的正确性。</p>
+<h3>2.4 PPTEval 评测框架</h3>
+<p>对应代码：<code>pptagent/ppteval/ppteval.py</code> 与 <code>pptagent/prompts/ppteval/*.txt</code>。</p>
+<p>PPTEval 采用 <strong>MLLM-as-a-judge</strong> 范式，评估三个维度（1-5 分制）：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>评分标准</th>
+<th>评测对象</th>
+<th>Prompt</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Content</strong></td>
+<td>文本简洁、语法正确、有相关图片支撑</td>
+<td>幻灯片级（逐页）</td>
+<td><code>ppteval_content.txt</code></td>
+</tr>
+<tr>
+<td><strong>Design</strong></td>
+<td>配色和谐、版面可读、视觉元素（几何形状等）提升吸引力</td>
+<td>幻灯片级（逐页）</td>
+<td><code>ppteval_style.txt</code></td>
+</tr>
+<tr>
+<td><strong>Coherence</strong></td>
+<td>结构递进、包含必要的背景信息</td>
+<td>整个演示文稿级</td>
+<td><code>ppteval_coherence.txt</code></td>
+</tr>
+</tbody></table>
+<p>评测流程（<code>ppteval.py</code>）：</p>
+<ol>
+<li><code>eval_slide()</code>（<code>ppteval.py:54-82</code>）：对每张幻灯片图片，先用<strong>视觉模型</strong>生成内容描述（<code>content_descriptor</code>）与风格描述（<code>style_descriptor</code>），再用<strong>文本模型</strong>分别对描述评分（<code>text_scorer</code> / <code>vision_scorer</code>）。这种&quot;<strong>感知（VLM）与判断（LLM）分离</strong>&quot;的设计是 PPTEval 的关键。</li>
+<li><code>eval_coherence()</code>（<code>ppteval.py:85-108</code>）：提取整份演示文稿文本，先用 <code>ppt_extractor</code> 抽取幻灯片描述与背景元数据，再用 <code>logic_scorer</code> 评一致性。</li>
+<li>聚合：Content/Design 取所有幻灯片的平均分，Coherence 为整体分。</li>
+</ol>
+<p><strong>与人类评分的一致性</strong>（论文 5.5 节）：招募 4 名研究生评 250 份演示文稿（50 份真实 + 200 份生成），Fleiss&#39; Kappa 平均 0.59；Pearson 相关 0.71、Spearman 相关 0.74，显著优于其他评测方法。</p>
+<p><strong>与传统指标对比</strong>（论文 Figure 7 热力图）：PPL 与 FID 与 Content/Design 几乎不相关（-0.02/-0.09），说明传统指标（PPL、ROUGE-L、FID）无法评估演示文稿质量——KCTV 拿到高 ROUGE-L（16.76）但低 Content（2.55），PPTAgent 则相反。</p>
+<h3>2.5 实验结果与消融</h3>
+<p>主结果（论文 Table 3，Qwen2.5_LM + Qwen2-VL_VM 配置）：</p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>SR(%)</th>
+<th>Content</th>
+<th>Design</th>
+<th>Coherence</th>
+<th>Avg</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>DocPres（规则）</td>
+<td>–</td>
+<td>2.98</td>
+<td>2.37</td>
+<td>3.28</td>
+<td>2.87</td>
+</tr>
+<tr>
+<td>KCTV（模板）</td>
+<td>88.0</td>
+<td>2.55</td>
+<td>2.95</td>
+<td>3.36</td>
+<td>2.95</td>
+</tr>
+<tr>
+<td><strong>PPTAgent</strong></td>
+<td><strong>95.0</strong></td>
+<td><strong>3.28</strong></td>
+<td><strong>3.27</strong></td>
+<td><strong>4.48</strong></td>
+<td><strong>3.67</strong></td>
+</tr>
+</tbody></table>
+<p>消融（论文 Table 4）说明四个组件的贡献：</p>
+<ul>
+<li><strong>w/o CodeRender</strong>（用 Guo et al. 的表示替换 HTML 渲染）：SR 从 95.0% 掉到 74.6% —— HTML 渲染显著降低交互复杂度；</li>
+<li><strong>w/o Schema</strong>（去掉 schema 引导）：SR 从 95.0% 掉到 78.8% —— schema 对生成鲁棒性关键；</li>
+<li><strong>w/o Outline / w/o Structure</strong>：Coherence 从 4.48 掉到 3.36/3.45 —— 大纲与结构型幻灯片分析对连贯性至关重要；</li>
+<li>自校正机制（论文 Figure 6）：所有模型都能修正超过一半的错误，GPT-4o 自校正能力最强。</li>
+</ul>
+<hr>
+<h2>3. DeepPresenter：环境接地反思的双智能体框架</h2>
+<h3>3.1 动机与核心贡献</h3>
+<p>DeepPresenter 指出现有演示文稿智能体的两个根本缺陷：</p>
+<ol>
+<li><strong>依赖预定义工作流与固定模板</strong>（如 PPTAgent 的编辑式流程、KCTV 的模板填充），无法适应多样化的用户意图，产出文本密集、研究深度不足、视觉设计与叙事脱节的幻灯片；</li>
+<li><strong>内省式反思（introspective self-reflection）失效</strong>：智能体操作的是中间表示（HTML/markdown），而用户感知的是<strong>渲染后的产物</strong>。很多缺陷（图片断裂、元素溢出、低对比度）只在感知状态（渲染后的幻灯片）中显现，内省反思无法察觉。</li>
+</ol>
+<p>三大贡献：</p>
+<ol>
+<li><strong>DeepPresenter</strong>：通过共享观察空间协调两个专职智能体（Researcher + Presenter）的智能体框架；</li>
+<li><strong>环境接地反思（Environment-Grounded Reflection）</strong>：把自校正建立在渲染后产物的感知状态上，而非内部信号上；</li>
+<li><strong>DeepPresenter-9B</strong>：用&quot;外在验证（extrinsic verification）&quot;合成的轨迹进行监督微调，小模型以极低代价接近大模型性能。</li>
+</ol>
+<h3>3.2 任务形式化</h3>
+<p>把演示文稿生成形式化为<strong>交互式智能体任务</strong>：给定指令 I 与配备工具库 T 和文件系统 F 的智能体环境 E，生成高质量演示文稿 P。生成过程是多步轨迹：</p>
+<pre><code>τ = {(r1, a1, o1), ..., (rT, aT, oT)}
+</code></pre>
+<p>每步：智能体生成推理轨迹 r_t，选择动作 a_t ∈ T，从 E 收到观察 o_t。轨迹分解为两个连续阶段：</p>
+<pre><code>τ = τ_R ∘ τ_P
+</code></pre>
+<ul>
+<li>τ_R：Researcher 轨迹；</li>
+<li>τ_P：Presenter 轨迹。</li>
+</ul>
+<p>两个智能体通过 F 通信：Researcher 把结构化文稿 M 和相关资产持久化到文件系统，Presenter 消费它们。</p>
+<h3>3.3 双智能体协作：Researcher + Presenter</h3>
+<p><strong>Researcher Agent</strong>（对应 <code>deeppresenter/agents/research.py</code> + <code>roles/Research.yaml</code>）：</p>
+<ul>
+<li>不遵循预定义工作流，而是<strong>自主规划探索</strong>：执行多步检索（<code>search_web</code>、<code>search_images</code>、<code>search_papers</code>、<code>fetch_url</code>）、文档解析（<code>convert_to_markdown</code>）、必要时创建辅助资产（<code>image_generation</code>、matplotlib 绘图）；</li>
+<li>探索深度与策略<strong>适配用户意图</strong>：技术性演讲需要调研相关工作，大众向演讲更重可理解的例子与生动插图；</li>
+<li>最终把内容组织成按叙事流排布的结构化 Markdown 文稿 M（用 <code>---</code> 分页，图片本地化并相对路径引用），持久化到 F；</li>
+<li>通过 <code>inspect_manuscript</code> 获取文稿诊断（页数、语言、图片资源可用性），最后调用 <code>finalize</code> 返回文稿路径。</li>
+</ul>
+<p><strong>Presenter Agent</strong>（对应 <code>deeppresenter/agents/design.py</code> + <code>roles/Design.yaml</code>）：</p>
+<ul>
+<li>不填充预定义模板，而是<strong>从零生成幻灯片</strong>；</li>
+<li>先制定全局设计计划（<code>designplan</code>：配色、字体、网格系统、字号规范），建立与主题共鸣的视觉基调（可持续主题用大地色系、学术教程用极简布局）；</li>
+<li>把每张幻灯片生成为独立的 HTML 文件（<code>slides/slide_01.html</code>、<code>slide_02.html</code>...），遵循设计计划把文稿内容翻译成视觉元素；</li>
+<li>每张幻灯片生成后调用 <code>inspect_slide</code>（渲染成像素图片）观察后渲染缺陷（溢出、重叠、低对比度），用 <code>thinking</code>（模型原生推理）规划针对性修改，然后 <code>edit</code> 修复；</li>
+<li>全部完成后 <code>finalize</code> 返回幻灯片目录。</li>
+</ul>
+<p><strong>多智能体并行扩展</strong>（<code>main.py</code> 中 <code>multiagent_mode</code>）：父智能体可通过 <code>delegate_subagent</code> 本地工具把长文档/多主题调研、&gt;=3 张幻灯片的批量生成<strong>并行委派</strong>给隔离工作区中的 SubAgent 实例（<code>agents/subagent.py</code>，max_turns=10），结果通过文件 + <code>finalize</code> 回传。论文 Figure 8(a) 的工具使用分析证实了角色分工：Researcher 大量使用 Retrieve 类工具（26.8%），Presenter 大量使用 File（40%）与 Reason（19.3%）类工具。</p>
+<h3>3.4 环境接地反思（Environment-Grounded Reflection）</h3>
+<p>这是 DeepPresenter 最核心的方法论创新（论文 Figure 2 对比）：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>自反思（Self-Reflection）</th>
+<th>环境接地反思（Env-Grounded Reflection）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发</td>
+<td>不确定性（Uncertain ❓）</td>
+<td><code>inspect</code> 工具调用</td>
+</tr>
+<tr>
+<td>输入</td>
+<td>内部信号（无外部观察）</td>
+<td>渲染后的幻灯片图像 / 文稿诊断</td>
+</tr>
+<tr>
+<td>缺陷</td>
+<td>发现不了后渲染缺陷（溢出、重叠、低对比度、断裂图片）</td>
+<td>能发现</td>
+</tr>
+</tbody></table>
+<p>实现上是 <strong><code>inspect</code> 工具</strong>作为显式的观察接口（<code>deeppresenter/tools/reflect.py</code>）：</p>
+<ul>
+<li><strong><code>inspect_slide(html_file, aspect_ratio)</code></strong>（<code>reflect.py:28-62</code>）：用 Node 管道（html2pptx）校验 HTML 合法性；若 <code>REFLECTIVE_DESIGN</code>（<code>design_agent</code> 是多模态且 <code>heavy_reflect</code>）开启，还用 Playwright 把 HTML 渲染为 PDF→JPEG，以 <code>ImageContent</code>（base64 JPEG）返回给多模态设计智能体，使其<strong>真正&quot;看到&quot;渲染后的幻灯片</strong>；</li>
+<li><strong><code>inspect_manuscript(md_file)</code></strong>（<code>reflect.py:66-117</code>）：解析 Markdown 文稿，统计页数、用 fastText LID 模型检测语言、校验所有图片引用（标记外链、缺失文件、缺失 alt 文本、重复使用），返回结构化诊断。</li>
+</ul>
+<p>由此形成 <strong>observe（观察）→ reflect（反思）→ revise（修正）</strong> 闭环，观察结果与用户感知一致。</p>
+<p>论文中的 <code>think</code> 工具并非一个注册的 MCP 工具，而是通过：</p>
+<ol>
+<li>模型原生的 reasoning 字段（<code>ChatMessage.reasoning</code>，<code>agent.py:183-186</code> 保留）；</li>
+<li>Agent Harness 本身的 think-act-observe 循环结构实现。</li>
+</ol>
+<h3>3.5 数据合成与轨迹蒸馏（DeepPresenter-9B）</h3>
+<p>为了在推理时降低闭源模型的高成本，DeepPresenter 训练了紧凑模型 DeepPresenter-9B。训练管线（论文 Figure 3）三步：</p>
+<p><strong>Step 1：任务构建（Query Construction）</strong>
+从 PersonaHub、arXiv、FinePDFs-Edu 三来源构建 1,152 个任务（1,024 训练 + 128 评测）。每个任务附加<strong>可验证约束</strong>（页数、语言、宽高比），如：&quot;I&#39;m an English teacher... Please create a 14-slide presentation in 4:3 aspect ratio, with all content in Chinese.&quot;（统计见论文 Table 1：中英各半、三来源各半、自由/受限宽高比混合）。</p>
+<p><strong>Step 2：验证引导的轨迹合成（Verification-Guided Trajectory Synthesis）</strong>
+关键问题：<strong>自验证偏差（self-verification bias）</strong>——智能体在自己产生的轨迹状态内评判自己的输出，验证与自我合理化纠缠，导致有缺陷的输出被接受。
+解决方案：<strong>外在验证（extrinsic verification）</strong>——在隔离上下文中产生验证信号。智能体调用 <code>inspect</code> 得到观察 o_t 后，<strong>独立的 critic 模型</strong>（论文用 Gemini-3-Pro，<code>PPTea-main/sarl/coldstart/process_oversight.py</code> 实现）基于 o_t 与中间产物做验证，输出识别缺陷（如低对比度）并给出可操作修改建议（如调整文字颜色）的推理轨迹，作为 <code>think</code> 调用注入智能体上下文，引导其修正后继续 rollout。
+论文 Figure 4 显示外在验证在各类缺陷（尤其是版面 layout 308 vs 212、渲染 render 101 vs 43）上检出数量远超自验证，说明自验证系统性漏检。</p>
+<p><strong>Step 3：轨迹过滤（Trajectory Filtering）</strong>
+三级过滤（<code>PPTea-main/sarl/evaluation/</code> 中的评分 + <code>trajectory_collect.py</code> 的阈值）：</p>
+<ol>
+<li>规则验证约束符合度（页数/宽高比/语言）；</li>
+<li>用 GLM-4.6 评估一致性，删除未按外在验证轨迹做对齐修改的（反思-动作不一致）轨迹；</li>
+<li>用 GLM-4.6V 评估输出质量，过滤有关键缺陷（元素重叠、图片断裂）的轨迹。</li>
+</ol>
+<p>最终 802 条轨迹通过过滤，在 GLM-4.6V-Flash 上用 MS-SWIFT 微调（batch 32、lr 1e-5、5 epochs、8×A800 约 80 GPU 小时），得到 DeepPresenter-9B。</p>
+<p>论文 Figure 5 展示过滤前的失败分布：质量错误 43.0%（自由式生成难保质量）、环境错误 32.3%（长时程脆弱性：上下文溢出与基础设施故障）、约束违规 13.5%、一致性错误 11.2%。</p>
+<h3>3.6 实验结果</h3>
+<p>评测协议：128 个 held-out 任务，四个维度：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>方法</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Constraint</strong></td>
+<td>规则验证：约束满足比例（页数/语言/宽高比），0-5 分</td>
+</tr>
+<tr>
+<td><strong>Content &amp; Style</strong></td>
+<td>沿用 Zheng et al. (2025) 的 MLLM 评测框架，GPT-5 为 judge，0-5 分</td>
+</tr>
+<tr>
+<td><strong>Diversity</strong></td>
+<td>DINOv2 特征 + Vendi Score（特征相似矩阵的特征值熵），0-1</td>
+</tr>
+</tbody></table>
+<p>主结果（论文 Table 2）：</p>
+<table>
+<thead>
+<tr>
+<th>框架</th>
+<th>模型</th>
+<th>Constraint</th>
+<th>Content</th>
+<th>Style</th>
+<th>Avg</th>
+<th>Diversity</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Gamma（商业）</td>
+<td>–</td>
+<td>4.93</td>
+<td>4.08</td>
+<td>4.08</td>
+<td>4.36</td>
+<td>0.52</td>
+</tr>
+<tr>
+<td>PPTAgent</td>
+<td>Gemini-3-Pro</td>
+<td>4.22</td>
+<td>3.09</td>
+<td>4.30</td>
+<td>3.87</td>
+<td>0.19</td>
+</tr>
+<tr>
+<td>KCTV</td>
+<td>Claude-Sonnet-4.5</td>
+<td>4.88</td>
+<td>2.90</td>
+<td>3.99</td>
+<td>3.92</td>
+<td>0.20</td>
+</tr>
+<tr>
+<td><strong>DeepPresenter</strong></td>
+<td><strong>Gemini-3-Pro</strong></td>
+<td><strong>4.70</strong></td>
+<td><strong>4.25</strong></td>
+<td><strong>4.37</strong></td>
+<td><strong>4.44</strong></td>
+<td><strong>0.79</strong></td>
+</tr>
+<tr>
+<td><strong>DeepPresenter-9B</strong></td>
+<td>微调</td>
+<td>4.77</td>
+<td>3.52</td>
+<td>4.29</td>
+<td>4.19</td>
+<td>0.53</td>
+</tr>
+</tbody></table>
+<p>要点：</p>
+<ul>
+<li>DeepPresenter + Gemini-3-Pro 达到 SOTA（4.44），超过商业系统 Gamma（4.36）与所有开源基线；</li>
+<li>Content 提升最大：Researcher 做意图自适应检索与综合，而非依赖固定工作流或用户提供材料；</li>
+<li>Style 提升来自内容感知设计与环境接地反思；</li>
+<li><strong>Diversity 0.79 是模板方法的 2 倍以上</strong>（0.17-0.35），自由式生成带来视觉多样性；</li>
+<li>DeepPresenter-9B 以 802 条轨迹达到 4.19，超过所有开源基线，接近 GPT-5（4.22）而成本低得多（论文 Figure 6 的帕累托前沿）。</li>
+</ul>
+<p>消融（论文 Table 3，Gemini-3-Pro）：</p>
+<ul>
+<li>w/o Grounded Reflection：4.44 → 4.32（关闭 inspect 后反思局限在渲染前产物）；</li>
+<li>w/o Dual-Agent：4.44 → 4.04（双智能体把长时程执行分解为专业化子任务贡献显著）；</li>
+<li>训练策略：w/o Trajectory Filtering 使 DeepPresenter-9B 从 4.19 → 4.03；extrinsic verification 带来比纯微调高 67% 的提升（Table 4：+0.20 vs +0.12）。</li>
+</ul>
+<p>人类评估（附录 A.1，2 名研究生评 32 份）：DeepPresenter 4.22 vs PPTAgent 3.46 / KCTV 3.48 / Gamma 4.09，相对排序与自动评测一致。</p>
+<hr>
+<h2>4. 代码架构总览：两条代码路径</h2>
+<pre><code>PPTAgent/  （仓库根目录）
+├── deeppresenter/          ← 当前主产品面（Agentic 运行时）
+│   ├── main.py             ← AgentLoop 编排入口
+│   ├── agents/             ← 智能体（agent.py 基类 + research/design/pptagent/planner/subagent）
+│   ├── tools/              ← MCP 工具服务器（search/any2markdown/reflect/task/tool_agents）
+│   ├── roles/              ← 角色定义（Research.yaml/Design.yaml/PPTAgent.yaml/Planner.yaml/SubAgent.yaml）
+│   ├── utils/              ← 配置/常量/日志/webview/mineru/mcp_client
+│   ├── html2pptx/          ← Node.js HTML→PPTX 转换管道
+│   ├── cli/                ← Typer CLI（onboard/generate/serve/config/clean）
+│   └── docker/             ← 沙箱 Docker 镜像与本地运行脚本
+│
+├── pptagent/               ← 旧版核心库（PPTAgent 论文的生成+评测）
+│   ├── pptgen.py           ← Stage II 生成流水线（PPTGen/PPTAgent）
+│   ├── induct.py           ← Stage I 版面归纳（SlideInducter）
+│   ├── apis.py             ← 编辑 API 与 CodeExecutor
+│   ├── agent.py            ← 通用 LLM 智能体（YAML 角色 + Jinja2）
+│   ├── presentation/       ← PPTX 解析/HTML 渲染/Closure 构建
+│   ├── document/           ← 文档解析（markdown→Document）
+│   ├── ppteval/            ← PPTEval 评测框架
+│   ├── roles/ prompts/     ← 角色与提示词模板
+│   ├── mcp_server.py       ← pptagent-mcp（模板式幻灯片生成 MCP server）
+│   └── templates/          ← 预处理的参考模板（beamer/cip/default/hit/thu/ucas）
+│
+└── PPTea-main/             ← 评测/蒸馏实验基础设施（独立仓库，deeppresenter 是软链接）
+    └── sarl/
+        ├── evaluation/     ← 各框架生成适配器 + 两阶段评分管线
+        ├── coldstart/      ← SFT 轨迹收集与蒸馏训练
+        ├── dataset/        ← 数据集构建（typings.py 数据模型）
+        └── analysis/       ← 论文图表（帕累托/工具使用/缺陷分布）
+</code></pre>
+<hr>
+<h2>5. Agent Harness 主循环详解</h2>
+<p><strong>Agent Harness</strong>（<code>deeppresenter/agents/agent.py</code>，462 行）是整个 DeepPresenter 的核心：一个通用的 <strong>think → act → observe</strong> ReAct 式工具调用循环，所有具体智能体（Research/Design/PPTAgent/Planner/SubAgent）都复用这个基类。</p>
+<h3>5.1 通用智能体基类 Agent</h3>
+<p><strong>初始化</strong>（<code>agent.py:57-136</code>）：</p>
+<ol>
+<li>从 <code>roles/&lt;ClassName&gt;.yaml</code> 加载角色配置（<code>RoleConfig</code>）：system prompt（分语言）、Jinja2 instruction 模板、<code>use_model</code>（用哪个 LLM 字段）、<code>ToolSet</code>（包含/排除哪些 MCP server 与工具）；</li>
+<li><code>self.llm = config[role_config.use_model]</code>（research_agent / design_agent / long_context_model）；</li>
+<li>记录 <code>context_window</code>（默认 40k = CONTEXT_LENGTH_LIMIT 200k / max_context_folds 5）、<code>max_context_turns</code>（5）、<code>max_turns</code>（可选上限）；</li>
+<li><code>_setup_toolset()</code>（<code>agent.py:138-155</code>）从 <code>agent_env</code> 解析工具列表（<code>&quot;all&quot;</code> 展开为所有已连接 server，再减排除项），生成 OpenAI function-tool 字典列表；</li>
+<li><strong>拼接系统提示词</strong>：角色 system prompt + <code>AGENT_PROMPT</code>（环境描述与工具调用规则：充分探索、并行工具调用、每轮最多 7 个工具、截断策略）+ <code>MA_RESEACHER_PROMPT</code>/<code>MA_RRESENTER_PROMPT</code>（多智能体委派指南）+ <code>OFFLINE_PROMPT</code>（离线模式）+ <code>CONTEXT_MODE_PROMPT</code>（上下文折叠模式）；</li>
+<li>初始化 <code>chat_history = [SYSTEM 消息]</code>。</li>
+</ol>
+<h3>5.2 action：LLM 思考与工具调用生成</h3>
+<p><strong><code>action()</code></strong>（<code>agent.py:191-240</code>）——每一轮循环的 LLM 步骤：</p>
+<ol>
+<li>递增 <code>turn_count</code>，执行 <code>max_turns</code> 上限（剩余少于 2 轮时注入 &quot;finish now&quot; 提示）；</li>
+<li>首次调用时把渲染好的 Jinja2 instruction 作为 USER 消息追加；</li>
+<li>调用 <code>self.llm.run(messages=self.chat_history, tools=self.tools)</code> —— <strong>OpenAI 原生 function calling</strong>；</li>
+<li>记录 token 用量到 <code>self.cost</code> 与 <code>self.context_length</code>；</li>
+<li>把 assistant 消息（content + tool_calls + 可选的 reasoning）追加到历史并返回。</li>
+</ol>
+<h3>5.3 execute：工具执行与观察收集</h3>
+<p><strong><code>execute()</code></strong>（<code>agent.py:250-348</code>）——每一轮循环的动作步骤：</p>
+<ol>
+<li>取出 assistant 消息的 <code>tool_calls</code>，用 JSON schema 校验参数，强制 <code>MAX_TOOLCALL_PER_TURN</code>（默认 7）；</li>
+<li>检测特殊工具 <strong><code>finalize</code></strong>：暂存其 <code>outcome</code> 参数与 <code>finish_id</code>，并注入 <code>agent_name</code>；</li>
+<li><strong>并行执行所有工具</strong>：<code>asyncio.gather(self.agent_env.tool_execute(t)...)</code>（<code>agent.py:292</code>）；</li>
+<li>观察归一化：含图片的结果按模型类型格式化（Gemini/Qwen 转 <code>role=USER</code>，Claude 转 <code>image</code>+<code>source.base64</code>）；</li>
+<li>观察追加到 <code>chat_history</code>，错误记录到 <code>error_history</code>；</li>
+<li>若 <code>finalize</code> 被调用且其观察文本等于 outcome，<strong>返回 outcome 字符串（表示循环完成）</strong>；</li>
+<li><strong>上下文预算告警</strong>（<code>agent.py:325-336</code>）：context 超 50% 注入 <code>HALF_BUDGET_NOTICE_MSG</code>，超 80% 注入 <code>URGENT_BUDGET_NOTICE_MSG</code>；</li>
+<li><strong>上下文溢出处理</strong>（<code>agent.py:341-347</code>）：<code>context_length &gt; context_window</code> 时，若启用折叠则 <code>compact_history()</code>，否则抛 RuntimeError；</li>
+<li>返回 outcome 字符串或观察 ChatMessage 列表。</li>
+</ol>
+<h3>5.4 上下文管理与 compact_history</h3>
+<p><strong><code>compact_history()</code></strong>（<code>agent.py:356-401</code>）——防止上下文溢出的核心机制：</p>
+<ol>
+<li>保留 <code>keep_head=10</code> + <code>keep_tail=4</code> 条消息，中间的折叠；</li>
+<li>先保存完整历史（<code>message_only=True</code>）；</li>
+<li>用 <code>MEMORY_COMPACT_MSG</code>（<code>constants.py:154-184</code> 的详细摘要指令）配合 <code>self.chat_history + [summary_ask]</code> 请求 LLM 总结；</li>
+<li>LLM 的摘要消息（可能含 tool_calls）被执行；追加 <code>CONTINUE_MSG</code>（最后折叠时 <code>LAST_ITER_MSG</code>）；</li>
+<li>重构历史为 <code>head + tail + [summary_ask, summary_message, *observations]</code>；</li>
+<li>受 <code>max_context_turns</code>（5 次折叠）限制。</li>
+</ol>
+<p>配套的 <code>_split_history()</code>（<code>agent.py:403-421</code>）保证 tool-call/tool-result 消息配对保持在 head 中，用 <code>HIST_LOST_MSG</code> 标记截断点。</p>
+<h3>5.5 loop：各智能体的主循环</h3>
+<p><strong><code>loop()</code></strong>（<code>agent.py:242-249</code>）是抽象异步生成器，所有具体智能体实现它，但模式相同：</p>
+<pre><code class="language-python">while True:
+    agent_message = await self.action(**kwargs)   # 思考 + 生成工具调用
+    yield agent_message                           # 流式输出进度
+    outcome = await self.execute(self.chat_history[-1].tool_calls)  # 行动 + 观察
+    if isinstance(outcome, list):
+        for item in outcome:
+            yield item                            # 流式输出观察
+    else:
+        yield outcome
+        break                                     # finalize → 循环结束
+</code></pre>
+<p>这是标准的 <strong>ReAct 式 harness</strong>：action（LLM）→ execute（工具）→ 观察 → 重复直到 <code>finalize</code>。</p>
+<p>各具体智能体的 loop：</p>
+<ul>
+<li><strong>Research</strong>（<code>research.py:8-24</code>）：<code>loop(req, outline_path)</code> 跑通用循环，action 注入 deepresearch prompt + 附件 + 大纲路径；最终 finalize 返回 <code>.md</code> 文稿路径；</li>
+<li><strong>Design</strong>（<code>design.py:5-20</code>）：<code>loop(req, markdown_file)</code> 创建 <code>slides/</code> 目录跑循环，<code>while True</code> 收到字符串 outcome 后跳出再 yield 一次（HTML 目录）；逐页 write + inspect_slide + 修复；</li>
+<li><strong>PPTAgent</strong>（<code>pptagent.py:5-29</code>）：<code>loop(req, markdown_file)</code> 通过 <code>pptagent</code> MCP 工具（list_templates/set_template/create_slide/write_slide/generate_slide）做模板式生成；</li>
+<li><strong>Planner</strong>（<code>planner.py:8-48</code>）：两阶段生成器——阶段 1 跑循环产出 outline JSON 路径；阶段 2 是<strong>交互式修订循环</strong>（<code>feedback = yield outcome</code>，CLI 通过 <code>.asend(feedback)</code> 推送修订指令，非空则追加为 USER 消息重新跑循环）；</li>
+<li><strong>SubAgent</strong>（<code>subagent.py:46-51</code>）：通用循环，从 Context 文件读委派任务，产出 deliverable 文件后 finalize。</li>
+</ul>
+<hr>
+<h2>6. Agent Harness 框架架构：模块与角色</h2>
+<h3>6.1 编排层 AgentLoop（main.py）</h3>
+<p><code>deeppresenter/main.py</code>（233 行）是顶层编排入口，<code>AgentLoop.run()</code> 是 async generator，逐步 yield 进度 <code>ChatMessage</code> 与最终产物路径。管线如下：</p>
+<pre><code>AgentLoop.run()
+├── 1. 设置阶段（main.py:58-84）
+│   ├── 可选校验 LLM
+│   ├── 附件复制到 workspace/attachments/（request.copy_to_workspace）
+│   ├── 写入 .input_request.json
+│   ├── 打开 AgentEnv 异步上下文
+│   └── [multiagent_mode] 注册 delegate_subagent 本地工具
+│
+├── 2. 可选 Planner 阶段（main.py:87-110）
+│   └── planner.loop(request) → outline JSON（可交互修订）
+│
+├── 3. Research 阶段（main.py:112-139）
+│   └── research_agent.loop(request, outline_path) → manuscript.md
+│
+├── 4. 生成阶段，按 convert_type 分支（main.py:141-221）
+│   ├── PPTAGENT：PPTAgent.loop(request, md_file) → .pptx
+│   └── DEEPPRESENTER：Design.loop(request, md_file) → slides/*.html
+│       └── 导出：convert_html_to_pptx()（Node html2pptx）
+│           └── 失败回退：PlaywrightConverter.convert_to_pdf → .pdf
+│
+└── 5. 收尾（main.py:222-224）
+    └── save_results() 写 intermediate_output.json（outline/manuscript/pptx/final 路径）
+</code></pre>
+<p>每个子阶段都 <code>save_history()</code> / <code>save_results()</code>（在 <code>finally</code> 中），日志写到 <code>workspace/.history/deeppresenter-loop.log</code>。</p>
+<h3>6.2 环境层 AgentEnv 与工具执行（env.py）</h3>
+<p><code>deeppresenter/agents/env.py</code>（454 行）管理 MCP server、工具注册、沙箱与异步工具执行：</p>
+<ul>
+<li><strong><code>__init__</code></strong>（<code>env.py:54-109</code>）：加载 <code>mcp.json</code> 的 <code>MCPServer</code> 定义（离线模式跳过 network server），计算 docker-in-docker 的 <code>HOST_WORKSPACE</code> 卷映射，构建 <code>envs</code> 字典（WORKSPACE/HOST_WORKSPACE/WORKSPACE_ID/CONFIG_FILE/PACKAGE_DIR...）传给 MCPClient，避免全局环境变量污染；注册工具注册表（<code>_local_tools</code>/<code>_tools_dict</code>/<code>_server_tools</code>/<code>_tool_to_server</code>）；<code>async_tool_mode</code> 开启时注册 <code>gather</code> 工具；</li>
+<li><strong><code>__aenter__</code></strong>（<code>env.py:228-266</code>）：清理同名陈旧 docker 容器，并行连接所有 MCP server，缓存全部工具规格到 <code>.tools.json</code>；</li>
+<li><strong><code>__aexit__</code></strong>（<code>env.py:268-300</code>）：断开 server，写 <code>tool_history.jsonl</code> 与 <code>tools_time_cost.json</code>（工具调用的完整审计日志）；</li>
+<li><strong><code>register_tool</code></strong>（<code>env.py:347-372</code>）：把 Python 可调用对象注册为本地工具（用 FastMCP 的 typeadapter 从类型注解自动生成 JSON schema），用于 <code>delegate_subagent</code> 与 <code>gather</code>；</li>
+<li><strong><code>tool_execute</code></strong>（<code>env.py:111-226</code>）：统一工具执行路径——jsonschema 校验参数 → <code>_execute_tool</code> → 包装成 <code>ChatMessage(role=TOOL)</code>。<strong>结果截断</strong>（<code>env.py:186-203</code>）：文本超 <code>TOOL_CUTOFF_LEN</code>（4096 字符）在最后一个换行截断并附 <code>CUTOFF_WARNING</code>，全文保存到本地文件供 <code>read_file</code> 按偏移读取；图片结果转 <code>image_url</code> 块。记录每个工具耗时/成功/失败；</li>
+<li><strong><code>_execute_tool</code></strong>（<code>env.py:403-423</code>）异步工具模式：非白名单工具（gather/finalize/inspect_slide 除外）限时 5 秒，超时返回占位符并后台继续，智能体之后用 <code>gather</code> 收集结果——这允许智能体<strong>并行执行多个长时程任务</strong>。</li>
+</ul>
+<p>工具调用路径：LLM 原生 function calling → <code>Agent.execute</code> → <code>agent_env.tool_execute</code> → 本地 Python 可调用 或 <code>MCPClient.session.call_tool</code>（<code>utils/mcp_client.py</code>，stdio/SSE 子进程连接，<code>MCP_CALL_TIMEOUT</code> 默认 1800 秒）。</p>
+<h3>6.3 MCP 工具服务器（tools/）</h3>
+<p>每个文件是独立的 FastMCP server（按 <code>mcp.json</code> 以子进程启动），提供以下工具：</p>
+<table>
+<thead>
+<tr>
+<th>Server</th>
+<th>类别</th>
+<th>工具</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Search</code>（<code>search.py</code>）</td>
+<td>Retrieve</td>
+<td><code>search_web</code> / <code>search_images</code> / <code>fetch_url</code> / <code>download_file</code></td>
+<td>SerpAPI 优先、Tavily 备选；Playwright 渲染网页 + trafilatura/markdownify 提取；图片下载校验（WEBP→PNG）</td>
+</tr>
+<tr>
+<td><code>Any2Markdown</code>（<code>any2markdown.py</code>）</td>
+<td>File</td>
+<td><code>convert_to_markdown</code></td>
+<td>PDF/DOCX 转 Markdown：MinerU（在线 API 或离线部署）或 MarkItDown；base64 图片落盘、链接改绝对路径、报告图片尺寸</td>
+</tr>
+<tr>
+<td><code>DeepPresenter</code>（<code>reflect.py</code>）</td>
+<td><strong>Reason</strong></td>
+<td><strong><code>inspect_slide</code></strong> / <strong><code>inspect_manuscript</code></strong></td>
+<td>环境接地反思的两个观察接口（见 3.4 节）</td>
+</tr>
+<tr>
+<td><code>Task</code>（<code>task.py</code>）</td>
+<td><strong>Control</strong></td>
+<td><strong><code>finalize</code></strong></td>
+<td>循环终止工具，按智能体类型做最终校验（Planner 要 .json；Research 要 .md 并重写图片绝对路径+注入宽高比到 alt；PPTAgent 要有效 .pptx；Design 要 slide_*.html 目录）</td>
+</tr>
+<tr>
+<td><code>ToolAgents</code>（<code>tool_agents.py</code>）</td>
+<td>Create/Reason</td>
+<td><code>image_generation</code> / <code>image_caption</code> / <code>document_summary</code></td>
+<td>条件注册：配置了 t2i_model 才提供文生图；vision_model 提供图片分类+描述（Table/Chart/Logo，少于 50 词）；multiagent 模式提供长文档摘要</td>
+</tr>
+<tr>
+<td><code>pptagent</code>（<code>pptagent/mcp_server.py</code>）</td>
+<td>模板生成</td>
+<td><code>list_templates</code> / <code>set_template</code> / <code>create_slide</code> / <code>write_slide</code> / <code>generate_slide</code> / <code>markdown_table_to_image</code> / <code>save_generated_slides</code></td>
+<td>旧版模板式生成，仅供 PPTAgent 智能体</td>
+</tr>
+<tr>
+<td><code>sandbox</code>（<code>docker/server.ts</code>）</td>
+<td>File</td>
+<td><code>read_file</code> / <code>write_file</code> / <code>move_file</code> / <code>edit_file</code> / <code>create_directory</code> / <code>list_directory</code> / <code>execute_command</code></td>
+<td>DesktopCommanderMCP 沙箱（Docker 或本地 Node 进程），<code>execute_command</code> 使智能体成为&quot;沙箱化代码智能体&quot;（可跑 shell/python/node/渲染 mermaid），<code>docker/config.json</code> 屏蔽危险命令（format/mkfs/dd/useradd...）</td>
+</tr>
+</tbody></table>
+<p>工具按论文 Table 8 分为五类：<strong>Retrieve</strong>（信息获取）、<strong>File</strong>（文档操作）、<strong>Reason</strong>（检查与反思）、<strong>Control</strong>（任务管理）、<strong>Create</strong>（代码执行与资产生成）。</p>
+<h3>6.4 角色定义（roles/）</h3>
+<p>每个角色是一个 YAML，定义 system prompt（中英）、Jinja2 instruction 模板、use_model 与 toolset：</p>
+<table>
+<thead>
+<tr>
+<th>角色文件</th>
+<th>智能体</th>
+<th>模型</th>
+<th>工具集亮点</th>
+<th>指令要点</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Research.yaml</code></td>
+<td>Research</td>
+<td>research_agent</td>
+<td>除 pptagent 外所有 server；排除 inspect_slide</td>
+<td>深度调研（广→窄）、信息美学、Markdown 文稿（<code>---</code> 分页、图片本地化）、inspect_manuscript、finalize 返回 .md</td>
+</tr>
+<tr>
+<td><code>Design.yaml</code></td>
+<td>Design</td>
+<td>design_agent（多模态）</td>
+<td>sandbox + delegate_subagent + inspect_slide + finalize</td>
+<td>HTML/CSS 固定版式设计、global.css、逐页生成 + inspect_slide 质量检查、按宽高比固定 body 尺寸</td>
+</tr>
+<tr>
+<td><code>PPTAgent.yaml</code></td>
+<td>PPTAgent</td>
+<td>research_agent</td>
+<td>pptagent + sandbox + finalize</td>
+<td>从 Markdown 做模板式生成、表格转图片、finalize 返回 .pptx</td>
+</tr>
+<tr>
+<td><code>Planner.yaml</code></td>
+<td>Planner</td>
+<td>research_agent</td>
+<td>除 tool_agents/deeppresenter 外所有；排除 search_images</td>
+<td>设计 JSON 大纲 <code>{&quot;slides&quot;:[{index,title,context}]}</code>、finalize 返回 .json</td>
+</tr>
+<tr>
+<td><code>SubAgent.yaml</code></td>
+<td>SubAgent</td>
+<td>design_agent</td>
+<td>除 pptagent 外所有；排除 delegate_subagent（禁递归）</td>
+<td>从 Context 文件完成单个委派子任务、产出自包含 deliverable、finalize</td>
+</tr>
+</tbody></table>
+<p>附加动态提示词片段（<code>utils/constants.py</code>）：<code>AGENT_PROMPT</code>（环境描述+工具调用规则）、<code>MA_RESEACHER_PROMPT</code>/<code>MA_RRESENTER_PROMPT</code>（多智能体并行委派指南）、<code>OFFLINE_PROMPT</code>、<code>CONTEXT_MODE_PROMPT</code>、上下文预算告警与 <code>MEMORY_COMPACT_MSG</code>。</p>
+<h3>6.5 配置与常量（utils/）</h3>
+<ul>
+<li><strong><code>utils/config.py</code></strong>：<code>Endpoint</code>（单端点，路由 litellm 或 AsyncOpenAI，支持 tool-calling/结构化输出/纯对话）、<code>LLM</code>（多端点交替重试 + 并发信号量 + 多模态自动检测 + <code>generate_image</code> + <code>validate()</code>）、<code>DeepPresenterConfig</code>（<code>multiagent_mode</code>/<code>offline_mode</code>/<code>async_tool_mode</code>/<code>context_folding</code>/<code>context_window</code>/<code>max_context_folds</code>/<code>heavy_reflect</code> + 三个 LLM 字段）；</li>
+<li><strong><code>utils/typings.py</code></strong>：<code>Role</code>（SYSTEM/USER/ASSISTANT/TOOL）、<code>ChatMessage</code>（统一消息模型，content 归一为 <code>{type:text/image_url}</code> 块列表）、<code>ToolSet</code>/<code>RoleConfig</code>、<code>Cost</code>、<code>ConvertType</code>（DEEPPRESENTER/PPTAGENT）、<code>PowerPointType</code>（16:9/4:3/A1-A4）、<code>InputRequest</code>（instruction/attachments/num_pages/template/powerpoint_type/convert_type/enable_planner/extra_info，<code>copy_to_workspace</code> 复制附件）；</li>
+<li><strong><code>utils/constants.py</code></strong>：全部可调常量（<code>WORKSPACE_BASE</code>、<code>TOOL_CUTOFF_LEN=4096</code>、<code>MAX_TOOLCALL_PER_TURN=7</code>、<code>MAX_SUBAGENT_TURNS=10</code>、<code>CONTEXT_LENGTH_LIMIT=200k</code>、<code>MCP_CALL_TIMEOUT=1800s</code>、<code>PIXEL_MULTIPLE=16</code>）；</li>
+<li><strong><code>utils/webview.py</code></strong>：<code>PlaywrightConverter</code>（共享 headless Chromium，HTML→按宽高比分页 PDF→pdf2image 栅格化为 slide_NN.jpg）与 <code>convert_html_to_pptx</code>（调 Node <code>html2pptx_cli.js</code>）；</li>
+<li><strong><code>utils/mineru_api.py</code></strong>：MinerU PDF 解析（在线 mineru.net API 或离线自部署端点）。</li>
+</ul>
+<h3>6.6 沙箱与 HTML→PPTX 转换</h3>
+<ul>
+<li><strong>沙箱</strong>：DesktopCommanderMCP 的 Docker 镜像（<code>docker/SandBox.Dockerfile</code>）或集群本地模式（<code>run_sandbox_local.sh</code>，SLURM 无 Docker 环境下用本地 Node 进程），提供通用代码执行能力；</li>
+<li><strong>HTML→PPTX</strong>（<code>html2pptx/</code>）：Node CLI 用 pptxgenjs + 自定义 <code>html2pptx.js</code> 转换器，支持 16:9/4:3/A1-A4 布局、<code>--validate</code>/<code>--soft</code> 选项，依赖 playwright 与 sharp；</li>
+<li><strong>配置示例</strong>：<code>config.yaml.example</code>（LLM 块 + 模式开关）、<code>mcp.json.example</code>（7 个 MCP server，<code>$VAR</code> 占位符由 <code>MCPServer._process_escape</code> 从 AgentEnv.envs 解析）。</li>
+</ul>
+<h3>6.7 完整端到端流程图</h3>
+<pre><code>pptagent generate &quot;主题&quot; -f 附件.pdf --planner
+  └─ CLI commands.generate → AgentLoop(config, request)
+       └─ AgentLoop.run()
+            ├─ AgentEnv.__aenter__：并行连接 7 个 MCP server，缓存工具规格
+            ├─ [enable_planner] Planner.loop：action/execute 循环 → outline.json → finalize
+            │     └─ CLI 交互式修订（_edit_outline：Rich 表格展示，y 批准或自然语言修订）
+            ├─ Research.loop：action → [search_web, fetch_url, convert_to_markdown,
+            │     image_generation...] → execute（并行、4096 字符截断）→ 观察
+            │     → inspect_manuscript → finalize(manuscript.md)
+            │     [context &gt;40k 触发 compact_history 摘要折叠]
+            ├─ convert_type 分支：
+            │   ├─ PPTAGENT：PPTAgent.loop → list_templates → set_template
+            │   │     → create_slide → write_slide → generate_slide → finalize(.pptx)
+            │   └─ DEEPPRESENTER：Design.loop
+            │         → read manuscript → write global.css
+            │         → [逐页] write slide_NN.html → inspect_slide（渲染+校验；
+            │            heavy_reflect 时多模态智能体&quot;看到&quot;渲染 JPEG 并修复）
+            │         → finalize(slides/)  [多智能体：delegate_subagent 并行生成]
+            └─ 导出：convert_html_to_pptx(slides/, out.pptx, 宽高比, soft)
+                  └─ node html2pptx_cli.js → pptxgenjs → .pptx
+                  [失败回退：PlaywrightConverter.convert_to_pdf → .pdf]
+</code></pre>
+<hr>
+<h2>7. PPTea-main：评测与蒸馏实验基础设施</h2>
+<h3>7.1 PPTea-main 是什么</h3>
+<p><strong>PPTea-main 不是独立产品，而是 DeepPresenter 项目的实验/评测/蒸馏基础设施</strong>：</p>
+<ul>
+<li><code>deeppresenter/</code> 是指向 <code>../PPTAgent/deeppresenter</code> 的<strong>软链接</strong>；</li>
+<li><code>sarl/</code> 包（0.1.0，docstring &quot;SARL Package&quot;）大量 import <code>deeppresenter.*</code> 与 <code>pptagent.*</code>；</li>
+<li>它实现了 project-demand.md 描述的完整闭环：<strong>各 Agent Harness 生成 → Workspace 对齐 → PPTEval 评分 → 分析 → 轨迹蒸馏</strong>。</li>
+</ul>
+<h3>7.2 评测流程（两阶段评分管线）</h3>
+<p><code>PPTea-main/sarl/evaluation/</code> 提供各竞争框架的<strong>生成适配器</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>框架</th>
+<th>机制</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>deeppresenter_gen.py</code></td>
+<td>DeepPresenter</td>
+<td>调 <code>deeppresenter.main.AgentLoop.run()</code>，写 <code>.datapoint.json</code> 后立即 <code>score_workspace()</code></td>
+</tr>
+<tr>
+<td><code>codex_gen.py</code></td>
+<td>Codex CLI（GPT-5）</td>
+<td><code>codex exec --sandbox danger-full-access</code> + <code>pptx-generator</code> Skill（<code>../Deeppresenter-skills/skills/pptx-generator</code>），<code>verify_workspace_ready()</code> 校验 PPTea 兼容别名</td>
+</tr>
+<tr>
+<td><code>pptagent_gen.py</code></td>
+<td>PPTAgent（旧基线）</td>
+<td>包装 <code>pptagent.pptgen.PPTAgent</code>，模板归纳生成，soffice 转 PDF</td>
+</tr>
+<tr>
+<td><code>gamma.py</code></td>
+<td>Gamma（商业）</td>
+<td>Gamma 公开 REST API，轮询完成后下载 PDF</td>
+</tr>
+<tr>
+<td><code>kctv.py</code></td>
+<td>KCTV（基线）</td>
+<td>两步 LLM：提取结构化 JSON → LaTeX，xelatex 渲染 PDF</td>
+</tr>
+</tbody></table>
+<p><strong>Phase 1 —— Content &amp; Style 评分</strong>（<code>score_exp.py</code> → <code>score_workspace()</code>）：</p>
+<ol>
+<li>读 <code>.datapoint.json</code> 与 <code>intermediate_output.json</code> 找最终 PDF；</li>
+<li>定位幻灯片图片目录 <code>.slide_images-pdf-{stem}/slide_XX.jpg</code>（<strong>所有框架的评测输入统一归一化为这个格式</strong>）；</li>
+<li>校验 PPTea 文稿别名 <code>.slides.md</code>（必须等于 <code>manuscript.md</code>）；</li>
+<li><strong>确定性约束检查</strong>：<code>dp.verify()</code> 用 PyPDF 查页数、mediabox 查宽高比、fasttext LID 查语言 → 0-1 分 ×5；</li>
+<li><strong>逐页 VLM 评分</strong>（8 并发，GPT-5 多模态 judge）：<ul>
+<li><code>content_descriptor</code> 描述内容 → <code>text_scorer</code> 打 Content 分；</li>
+<li><code>style_descriptor</code> 描述风格 → <code>vision_scorer</code> 打 Style 分；</li>
+</ul>
+</li>
+<li>写 <code>slide_evals.json</code>（逐页）与 <code>evals.json</code>（平均：constraint/content/style）。</li>
+</ol>
+<p><strong>Phase 2 —— 约束 VLM 评测</strong>（<code>score_exp_complex.py</code> → <code>score_workspace_constraints()</code>）：</p>
+<ol>
+<li>仅对通过 Phase 1 阈值的 workspace 运行（默认 min_content=3.5 / min_style=3.5 / min_constraint=1.0）；</li>
+<li>对 DataPoint 中的每个 <code>Constraint</code>（STYLE 类评估所有页，其余评估指定页），用 <code>prompt/judge_constraints.txt</code> VLM judge 判定 satisfied(1.0)/partially(0.5)/not(0.0)；</li>
+<li>写 <code>constraint_evals.json</code>，更新 <code>evals.json</code> 的 <code>constraint_vlm</code>。</li>
+</ol>
+<p><strong>辅助评测设施</strong>：</p>
+<ul>
+<li><code>divesity.py</code>：DINOv2 特征 + Vendi Score 的幻灯片风格多样性指标（0-1）；</li>
+<li><code>plot_score_dist.py</code>：分数分布直方图（确定过滤阈值）；</li>
+<li><code>review_server.py</code>：FastAPI 人工审核面板（8080 端口，缩略图+分数网格、逐 workspace 审核、reasonable/partially/unreasonable 三档判定）；</li>
+<li><code>finish_codex_benchmark.py</code>：Codex workspace 的确定性终结器（校验语义产物存在、重跑 pptxgen html validate/render + convert + package，验证 PPTea 别名；<strong>明确拒绝合成内容</strong>，只做确定性渲染/转换/打包）。</li>
+</ul>
+<h3>7.3 数据模型与 Workspace 对齐</h3>
+<p>核心数据模型（<code>sarl/dataset/typings.py</code>）：</p>
+<pre><code class="language-python">DataPoint:  # 一个评测任务
+  prompt: str            # 用户指令
+  language: &quot;zh&quot;|&quot;en&quot;
+  source: &quot;arXiv&quot;|&quot;finepdfs&quot;|&quot;personahub&quot;|...
+  aspect_ratio: PowerPointType   # 16:9 | 4:3 | A1
+  page_low, page_high: int       # 页数约束
+  attachments: list[str]         # 附件路径
+  constraints: list[Constraint]  # 结构约束（STYLE/COVER/AGENDA/VISUAL_CHART/...）
+  task_id: str                   # md5(prompt+attachments)[:8]
+</code></pre>
+<p><strong>Workspace 对齐协议</strong>（所有框架必须产出）：</p>
+<pre><code>workspace/{task_id}/
+  .datapoint.json            # 输入任务
+  .slides.md                 # == manuscript.md（PPTea 文稿别名）
+  manuscript.md              # 完整幻灯片文稿
+  slide_manifest.json        # 幻灯片结构清单
+  design-system.json         # 品牌/排版配置
+  slides/global.css + slide_01.html...  # HTML 幻灯片源码
+  renders/html/ slide_01.png + renders/pptx/ slide_01.png   # 渲染截图
+  .slide_images-pdf-{stem}/slide_XX.jpg   # 评测图片（评分唯一输入）
+  delivery/ presentation.pptx + presentation.pdf + source.zip  # 最终交付
+  intermediate_output.json / run.json / qa/ / evals.json / slide_evals.json / constraint_evals.json
+</code></pre>
+<h3>7.4 轨迹蒸馏与冷启动</h3>
+<p><code>sarl/coldstart/</code> 实现 SFT 蒸馏管线（把大模型 DeepPresenter 蒸馏为 Qwen3-VL-4B）：</p>
+<ul>
+<li><strong><code>trajectory_collect.py</code></strong>：把完成的 DeepPresenter workspace 转成 SFT 轨迹，应用质量过滤（<code>constraint==1.0, content&gt;=3.9, style&gt;=3.9, constraint_vlm&gt;=0.65</code>），过滤重复输出、消息去重、注入合成 <code>thinking</code> 工具，导出 <code>data/stage1/trajectories_*.json</code>——<strong>评测分数闭环回到训练数据筛选</strong>；</li>
+<li><strong><code>coldstart.sh</code></strong>：Megatron SFT 训练 Qwen3-VL-4B-Instruct（4 GPU、TP=4、56K 上下文、3 epochs、lr 1e-5）；</li>
+<li><strong><code>process_oversight.py</code></strong>：外在验证/过程监督——VLM critic（<code>vl_oversight</code>）审查 Design Agent 的 HTML 幻灯片的版面/渲染/风格问题（severity 0-3）+ <code>agent_watch</code> 幻觉检测 + <code>critic_follow</code> 计划遵循检查（论文 3.2 节 extrinsic verification 的实现）；</li>
+<li><code>sarl/analysis/efficiency.py</code>：成本-性能帕累托图（论文 Figure 6 数据）。</li>
+</ul>
+<hr>
+<h2>8. 与直接让 CodeX 生成 PPT 的对比</h2>
+<h3>8.1 直接 CodeX 方式的做法</h3>
+<p>&quot;直接让 CodeX 生成 PPT，给他参考图附件&quot;的做法是：把任务提示 + 参考图片作为附件给 CodeX，让它用通用编码能力（python-pptx / html / marp 等）直接写代码生成 PPTX。在我们的评测中，对应 <code>codex_gen.py</code>：<code>codex exec --sandbox danger-full-access</code> + <code>pptx-generator</code> Skill（把 DeepPresenter 流程蒸馏为 Codex 可用的 Skill 文档 + 确定性脚本）。</p>
+<h3>8.2 本质区别一：Research 与 Design 的解耦</h3>
+<p><strong>DeepPresenter</strong>：两个专职智能体、两段轨迹、一个共享文件系统。</p>
+<ul>
+<li>Researcher 用意图自适应策略做<strong>多步检索综合</strong>（web/图片/论文/附件解析），产出结构化文稿 M（页面/主题/证据/资产绑定）；</li>
+<li>Presenter 在独立轨迹中基于 M 做<strong>内容驱动的视觉设计</strong>，每页 inspect 修复。</li>
+</ul>
+<p><strong>直接 CodeX</strong>：单一 agent 用统一上下文同时承担调研与设计。问题：</p>
+<ul>
+<li>调研深度受上下文窗口限制，长文档/多主题调研容易浅尝辄止；</li>
+<li>&quot;调研&quot;与&quot;设计&quot;互相抢占 token 预算，设计阶段上下文已接近极限（对应 DeepPresenter 论文统计的 32.3% 环境错误：上下文溢出）；</li>
+<li>附件证据使用浅层：实测（<code>experiment-codex-vs-deeppresenter-finalcheck-20260813.md</code>）中 Codex 对 14 页试卷附件只做&quot;题目级裁剪+通用标题+两条短要点&quot;，而 DeepPresenter 把 955 行 Markdown 解析成概念级教学图（station model、seismogram S-P timing、subduction quakes...），3-4 条因果要点 + 与论点直接绑定的可读图。</li>
+</ul>
+<h3>8.3 本质区别二：环境接地反思 vs 内省反思</h3>
+<p><strong>DeepPresenter</strong> 的 <code>inspect_slide</code> 把 HTML 渲染成像素图交给多模态智能体&quot;亲眼看&quot;，<code>inspect_manuscript</code> 给结构化诊断（页数/语言/资源缺失）。反思条件是<strong>渲染后的感知状态</strong>，与用户看到的一致，能发现：</p>
+<ul>
+<li>后渲染缺陷（元素溢出、重叠、低对比度、断裂图片）；</li>
+<li>图片路径前缀缺失（论文 Figure 2 例子：&quot;fig1.jpg&quot; missing &quot;images/&quot; prefix）。</li>
+</ul>
+<p><strong>直接 CodeX</strong> 的反思大多是内省式的：看自己的代码和中间文本（HTML/代码），&quot;我觉得没问题&quot;。问题：</p>
+<ul>
+<li>自验证偏差（self-verification bias）：在自己的轨迹状态内评判自己的输出；</li>
+<li>代码级合法（HTML 语法正确、布局坐标在界内）≠ 渲染级正确（溢出/重叠/可读性）；</li>
+<li>实测中 Codex 的 QA 检查聚焦路径/可读性/转换成功，<strong>抓不到核心内容失败</strong>：&quot;这个视觉真的支撑了本页论点吗？&quot;</li>
+</ul>
+<h3>8.4 本质区别三：受控工具生态 vs 通用编码环境</h3>
+<p><strong>DeepPresenter</strong> 提供 5 类 20+ 个受控 MCP 工具：</p>
+<ul>
+<li>Retrieve（search_web/images/papers、fetch_url、document_analyze、image_caption）；</li>
+<li>File（convert_to_markdown、read/write/move/edit/download_file、execute_command、目录管理）；</li>
+<li>Reason（thinking、inspect_slide、inspect_manuscript）；</li>
+<li>Control（todo_create/update/list、finalize）；</li>
+<li>Create（image_generation）。</li>
+</ul>
+<p>工具的<strong>语义边界明确</strong>（如 <code>search_web</code> 封装了检索+结果归一化）、<strong>有校验</strong>（<code>finalize</code> 按角色校验产物、<code>download_file</code> 校验图片格式与路径、工具输出 4096 字符截断+全文落盘）、<strong>有审计</strong>（tool_history.jsonl、tools_time_cost.json）、<strong>有沙箱</strong>（危险命令黑名单）。</p>
+<p><strong>直接 CodeX</strong> 只有一个通用 sandbox + 文件系统 + shell。能力等价但缺少：</p>
+<ul>
+<li>语义化的检索工具（检索质量依赖模型自己拼 URL/API）；</li>
+<li>专门的渲染观察接口（没有 inspect，只能靠写脚本截图再读，或干脆不检查）；</li>
+<li>按角色约束的终止校验（finalize 的产物类型验证）；</li>
+<li>上下文管理（工具截断、压缩折叠、预算告警）。</li>
+</ul>
+<h3>8.5 本质区别四：评测闭环</h3>
+<ul>
+<li>PPTAgent/DeepPresenter 自带评测框架（PPTEval / Constraint+Content+Style+Diversity），评测分数驱动实验迭代；</li>
+<li>本项目的蒸馏管线（<code>trajectory_collect.py</code>）把<strong>评测分数作为 SFT 轨迹过滤阈值</strong>（constraint==1.0、content&gt;=3.9、style&gt;=3.9、constraint_vlm&gt;=0.65），形成&quot;评测→过滤→训练→再评测&quot;闭环；</li>
+<li>Codex 方式是通用 agent，没有与演示文稿语义绑定的评测反馈回路。</li>
+</ul>
+<h3>8.6 实测对比数据</h3>
+<p>12 样本实测（<code>codex-skill-ppt-additional-analysis*.md</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Codex+Skill</th>
+<th>DeepPresenter</th>
+<th>差距</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Content</td>
+<td>2.62</td>
+<td>4.33</td>
+<td><strong>主要差距</strong>（受众改写、证据选择、有意义的视觉）</td>
+</tr>
+<tr>
+<td>Style</td>
+<td>3.96</td>
+<td>4.45</td>
+<td>较小（页数/渲染/基本布局已不是瓶颈）</td>
+</tr>
+</tbody></table>
+<p>单样本细看（<code>07bbf73b</code>，14 页附件 deck）：</p>
+<ul>
+<li>Codex 逐页 Content：<code>4,3,3,2,2,3,2,2,2,2,2,2,2,3</code>——中段大面积 2/5 塌陷；</li>
+<li>DeepPresenter 逐页 Content：<code>3,3,3,3,3,4,5,5,5,4,5,5,4,3</code>——多数页 4-5/5；</li>
+<li>Codex 页级样式 Style 4.0（结构有效、视觉一致），但&quot;每页一个 PDF 裁剪图 + 通用证据标题 + 两条短要点&quot;，视觉被评价为&quot;小、难读、与页主题弱相关甚至离题&quot;；</li>
+<li>单页 A1 海报任务（<code>c5cae881</code>）两者打平（4.0/4.0/1.0）——因为单页合成任务无多页证据路由问题，Skill 足以匹配。</li>
+</ul>
+<p><strong>结论</strong>：直接 CodeX（即使配上 Skill）在&quot;多页、附件密集、需要把附件内容转成教学产物&quot;的任务上，与 DeepPresenter 的核心差距在<strong>语义内容质量</strong>（证据提取、论点-证据绑定、视觉信息增益），而非确定性约束或转换稳定性。</p>
+<hr>
+<h2>9. 从论文到代码的对应关系速查表</h2>
+<table>
+<thead>
+<tr>
+<th>论文概念</th>
+<th>代码位置</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>PPTAgent Stage I 幻灯片分类</td>
+<td><code>pptagent/induct.py:95-110</code>（category_split，<code>prompts/category_split.txt</code>）</td>
+</tr>
+<tr>
+<td>PPTAgent Stage I 版面聚类</td>
+<td><code>pptagent/induct.py:112-151</code> + <code>model_utils.py:291-345</code>（get_cluster，sim_bound=0.65）</td>
+</tr>
+<tr>
+<td>PPTAgent Stage I Schema 提取</td>
+<td><code>pptagent/induct.py:175-208</code>（content_induct）+ <code>presentation/layout.py</code>（Element/Layout）</td>
+</tr>
+<tr>
+<td>PPTAgent Stage II 大纲生成</td>
+<td><code>pptagent/pptgen.py:239-318</code>（generate_outline + _add_functional_layouts）</td>
+</tr>
+<tr>
+<td>PPTAgent Stage II 版面选择/内容生成</td>
+<td><code>pptgen.py:434-467</code> / <code>469-491</code>（_select_layout / _generate_content）</td>
+</tr>
+<tr>
+<td>编辑 API</td>
+<td><code>pptagent/apis.py</code>（replace_paragraph/replace_image/del_paragraph/del_image/clone_paragraph）</td>
+</tr>
+<tr>
+<td>自校正 REPL</td>
+<td><code>pptgen.py:493-529</code>（_edit_slide）+ <code>apis.py:127-203</code>（execute_actions）</td>
+</tr>
+<tr>
+<td>HTML 渲染（CodeRender）</td>
+<td><code>pptagent/presentation/presentation.py:193-216</code>（SlidePage.to_html）+ <code>shapes.py</code></td>
+</tr>
+<tr>
+<td>Closure 延迟构建</td>
+<td><code>pptagent/presentation/shapes.py:218-246</code>（Closure）+ <code>presentation.py:122-144</code>（build）</td>
+</tr>
+<tr>
+<td>PPTEval</td>
+<td><code>pptagent/ppteval/ppteval.py</code> + <code>prompts/ppteval/*.txt</code>（三维度 prompt）</td>
+</tr>
+<tr>
+<td>多样性指标</td>
+<td><code>pptagent/ppteval/divesity.py</code>（Vendi Score）+ <code>sarl/evaluation/divesity.py</code></td>
+</tr>
+<tr>
+<td>Agent Harness 主循环</td>
+<td><code>deeppresenter/agents/agent.py</code>（action:191-240 / execute:250-348 / compact_history:356-401 / loop:242-249）</td>
+</tr>
+<tr>
+<td>AgentLoop 编排</td>
+<td><code>deeppresenter/main.py:43-224</code>（run）</td>
+</tr>
+<tr>
+<td>AgentEnv 与工具执行</td>
+<td><code>deeppresenter/agents/env.py</code>（tool_execute:111-226 / register_tool:347-372）</td>
+</tr>
+<tr>
+<td>MCP 客户端</td>
+<td><code>deeppresenter/utils/mcp_client.py</code></td>
+</tr>
+<tr>
+<td>inspect_slide / inspect_manuscript</td>
+<td><code>deeppresenter/tools/reflect.py:28-62 / 66-117</code></td>
+</tr>
+<tr>
+<td>finalize 终止校验</td>
+<td><code>deeppresenter/tools/task.py:58-111</code></td>
+</tr>
+<tr>
+<td>角色定义</td>
+<td><code>deeppresenter/roles/*.yaml</code> + <code>utils/constants.py</code>（动态提示词片段）</td>
+</tr>
+<tr>
+<td>上下文折叠</td>
+<td><code>agent.py:356-401</code>（compact_history）+ <code>constants.py:154-184</code>（MEMORY_COMPACT_MSG）</td>
+</tr>
+<tr>
+<td>多智能体并行</td>
+<td><code>deeppresenter/agents/subagent.py</code>（delegate_subagent）+ <code>main.py:74-78</code></td>
+</tr>
+<tr>
+<td>HTML→PPTX</td>
+<td><code>deeppresenter/utils/webview.py:169-233</code> + <code>html2pptx/html2pptx_cli.js</code></td>
+</tr>
+<tr>
+<td>沙箱</td>
+<td><code>deeppresenter/docker/server.ts</code>（DesktopCommanderMCP）+ <code>run_sandbox_local.sh</code></td>
+</tr>
+<tr>
+<td>外在验证（extrinsic verification）</td>
+<td><code>PPTea-main/sarl/coldstart/process_oversight.py</code>（vl_oversight/agent_watch/critic_follow）</td>
+</tr>
+<tr>
+<td>轨迹过滤/蒸馏</td>
+<td><code>sarl/coldstart/trajectory_collect.py</code> + <code>coldstart.sh</code>（Qwen3-VL-4B SFT）</td>
+</tr>
+<tr>
+<td>评测两阶段管线</td>
+<td><code>sarl/evaluation/score_exp.py</code>（Phase 1）+ <code>score_exp_complex.py</code>（Phase 2）</td>
+</tr>
+<tr>
+<td>约束验证</td>
+<td><code>sarl/dataset/typings.py</code>（DataPoint.verify）+ <code>prompt/judge_constraints.txt</code></td>
+</tr>
+<tr>
+<td>人工审核</td>
+<td><code>sarl/evaluation/review_server.py</code>（FastAPI）</td>
+</tr>
+<tr>
+<td>Codex 基线</td>
+<td><code>sarl/evaluation/codex_gen.py</code> + <code>../Deeppresenter-skills/skills/pptx-generator</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>10. 总结与启示</h2>
+<ol>
+<li><p><strong>两代系统的演进主线</strong>：PPTAgent（2025）证明&quot;编辑式生成 + 参考模板&quot;能大幅超越纯摘要式生成，但受限于依赖参考演示文稿与固定工作流；DeepPresenter（2026）转向&quot;双智能体 + 自由式生成 + 环境接地反思&quot;，把生成从&quot;模板填充&quot;解放为&quot;内容驱动的自主设计与修正&quot;，并进一步用外在验证合成轨迹蒸馏出 9B 小模型。</p>
+</li>
+<li><p><strong>Agent Harness 的本质</strong>：一个带上下文管理的 think-act-observe 工具调用循环（<code>Agent.action → execute → 观察 → 直到 finalize</code>），配上<strong>角色化提示词、MCP 工具生态、沙箱执行、上下文折叠、多智能体委派</strong>，就构成了 DeepPresenter 的通用智能体框架——这套框架不限于 PPT 生成，可复用于任意&quot;长时程、工具密集、需要迭代反思&quot;的任务。</p>
+</li>
+<li><p><strong>与直接 CodeX 的差距不在&quot;有没有 agent&quot;，而在&quot;agent 的观察与反思是否接地&quot;</strong>：DeepPresenter 的 <code>inspect</code> 让智能体&quot;亲眼看到&quot;渲染产物，Researcher/Presenter 解耦让每段轨迹专注且上下文充足，受控工具 + finalize 校验让长时程执行可审计。这些正是直接 CodeX（哪怕配上 Skill）难以在通用环境中复现的。</p>
+</li>
+<li><p><strong>对本项目的意义</strong>（<code>project-demand.md</code>）：把 DeepPresenter/PPTAgent 流程蒸馏为 <code>pptx-generator</code> Skill 供 Codex/CC 使用，本质上是在&quot;通用 Agent Harness（Codex）&quot;里重建 DeepPresenter 的关键机制：Workspace 对齐（<code>.slides.md</code>/<code>.slide_images-pdf-*</code> 归一化）、确定性管道（research/html/qa/convert/package）、评测对齐（pptx-evaluator + GPT-5）。实测表明机械对齐已达标（页数/渲染/打包），剩余差距集中在<strong>附件语义化与证据绑定</strong>——这正是 DeepPresenter 论文里 Researcher 环节（意图自适应检索 + 结构化文稿）与&quot;证据有信息增益&quot;评估准则的体现，也是下一步迭代（topic map、证据绑定 QA、对象级 PDF 裁剪）应聚焦的方向。</p>
+</li>
+</ol>
+]]></content>
+        <author>
+            <name>wzh</name>
+            <email>3350782760@qq.com</email>
+            <uri>https://wangzh12023.github.io/blog</uri>
+        </author>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Use scp tool]]></title>
+        <id>https://wangzh12023.github.io/blog/blog/use-scp-tool</id>
+        <link href="https://wangzh12023.github.io/blog/blog/use-scp-tool"/>
+        <updated>2024-12-23T00:00:00.000Z</updated>
+        <content type="html"><![CDATA[<p>Today I have to do the task to transfer the prepared data from one server to another. And I find that we can use the tool <code>scp</code> to transfer files between two different host or between server and local computer.</p>
+<pre><code class="language-bash">scp -r path/to/local usernameToObject@ObjectIp:ObjectPathToSave #recursively transfer files in the dir
+
+#Some other command
+scp file user@host:/path/to/file   # copying a file to the remote system using scp command
+scp user@host:/path/to/file /local/path/to/file   # copying a file from the remote system using scp command
+
+scp &lt;options&gt; source_path destination_path # if we just want to transfer files in the
+
+-r      # transfer directory
+-v      # see the transfer details
+-C      # copy files with compression
+-l 800  # limit bandwidth with 800
+-p      # preserving the original attributes of the copied files
+-P      # connection port
+-q      # hidden the output
+</code></pre>
+]]></content>
+        <author>
+            <name>wzh</name>
+            <email>3350782760@qq.com</email>
+            <uri>https://wangzh12023.github.io/blog</uri>
+        </author>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Gkxx__的 .vscode]]></title>
+        <id>https://wangzh12023.github.io/blog/blog/gkxx-vscode-config</id>
+        <link href="https://wangzh12023.github.io/blog/blog/gkxx-vscode-config"/>
+        <updated>2024-08-23T00:00:00.000Z</updated>
+        <content type="html"><![CDATA[<p>翻到已经结课的cs100，Update一下gkxx__的配置文件</p>
+<p><del><code>你们已经长大了，应该学着自己写configure files了</code></del></p>
+<blockquote>
+<p>All in <code>.vscode</code></p>
+</blockquote>
+<p><code>c_cpp_properties.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;configurations&quot;: [
+      {
+          &quot;name&quot;: &quot;Win32&quot;,
+          &quot;compilerPath&quot;: &quot;Your_Path\\mingw64\\bin\\gcc.exe&quot;,
+          &quot;cStandard&quot;: &quot;c17&quot;,
+          &quot;cppStandard&quot;: &quot;c++17&quot;,
+          &quot;intelliSenseMode&quot;: &quot;windows-gcc-x64&quot;,
+          &quot;compilerArgs&quot;: [
+              &quot;-Wall&quot;,
+              &quot;-Wpedantic&quot;,
+              &quot;-Wextra&quot;
+          ]
+      }
+  ],
+  &quot;version&quot;: 4
+}
+</code></pre>
+<p><code>settings.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;files.associations&quot;: {
+    &quot;*.go&quot;: &quot;go&quot;,
+    &quot;iostream&quot;: &quot;cpp&quot;,
+    &quot;array&quot;: &quot;cpp&quot;,
+    &quot;deque&quot;: &quot;cpp&quot;,
+    &quot;string&quot;: &quot;cpp&quot;,
+    &quot;unordered_map&quot;: &quot;cpp&quot;,
+    &quot;vector&quot;: &quot;cpp&quot;,
+    &quot;string_view&quot;: &quot;cpp&quot;,
+    &quot;initializer_list&quot;: &quot;cpp&quot;,
+    &quot;stdexcept&quot;: &quot;cpp&quot;,
+    &quot;iosfwd&quot;: &quot;cpp&quot;,
+    &quot;atomic&quot;: &quot;cpp&quot;,
+    &quot;bit&quot;: &quot;cpp&quot;,
+    &quot;*.tcc&quot;: &quot;cpp&quot;,
+    &quot;cctype&quot;: &quot;cpp&quot;,
+    &quot;clocale&quot;: &quot;cpp&quot;,
+    &quot;cmath&quot;: &quot;cpp&quot;,
+    &quot;compare&quot;: &quot;cpp&quot;,
+    &quot;concepts&quot;: &quot;cpp&quot;,
+    &quot;cstdarg&quot;: &quot;cpp&quot;,
+    &quot;cstddef&quot;: &quot;cpp&quot;,
+    &quot;cstdint&quot;: &quot;cpp&quot;,
+    &quot;cstdio&quot;: &quot;cpp&quot;,
+    &quot;cstdlib&quot;: &quot;cpp&quot;,
+    &quot;cwchar&quot;: &quot;cpp&quot;,
+    &quot;cwctype&quot;: &quot;cpp&quot;,
+    &quot;exception&quot;: &quot;cpp&quot;,
+    &quot;algorithm&quot;: &quot;cpp&quot;,
+    &quot;functional&quot;: &quot;cpp&quot;,
+    &quot;iterator&quot;: &quot;cpp&quot;,
+    &quot;memory&quot;: &quot;cpp&quot;,
+    &quot;memory_resource&quot;: &quot;cpp&quot;,
+    &quot;numeric&quot;: &quot;cpp&quot;,
+    &quot;optional&quot;: &quot;cpp&quot;,
+    &quot;random&quot;: &quot;cpp&quot;,
+    &quot;system_error&quot;: &quot;cpp&quot;,
+    &quot;tuple&quot;: &quot;cpp&quot;,
+    &quot;type_traits&quot;: &quot;cpp&quot;,
+    &quot;utility&quot;: &quot;cpp&quot;,
+    &quot;istream&quot;: &quot;cpp&quot;,
+    &quot;limits&quot;: &quot;cpp&quot;,
+    &quot;new&quot;: &quot;cpp&quot;,
+    &quot;numbers&quot;: &quot;cpp&quot;,
+    &quot;ostream&quot;: &quot;cpp&quot;,
+    &quot;streambuf&quot;: &quot;cpp&quot;,
+    &quot;typeinfo&quot;: &quot;cpp&quot;,
+    &quot;stdbool.h&quot;: &quot;c&quot;,
+    &quot;map&quot;: &quot;cpp&quot;,
+    &quot;set&quot;: &quot;cpp&quot;
+  }
+}
+</code></pre>
+<p><code>tasks.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;tasks&quot;: [
+    {
+      &quot;type&quot;: &quot;cppbuild&quot;,
+      &quot;label&quot;: &quot;C/C++: gcc.exe 生成活动文件&quot;,
+      &quot;command&quot;: &quot;Your_Path\\mingw64\\bin\\gcc.exe&quot;,
+      &quot;args&quot;: [
+        &quot;-fdiagnostics-color=always&quot;,
+        &quot;-g&quot;,
+        &quot;${file}&quot;,
+        &quot;-o&quot;,
+        &quot;${fileDirname}\\${fileBasenameNoExtension}.exe&quot;
+      ],
+      &quot;options&quot;: {
+        &quot;cwd&quot;: &quot;${fileDirname}&quot;
+      },
+      &quot;problemMatcher&quot;: [
+        &quot;$gcc&quot;
+      ],
+      &quot;group&quot;: {
+        &quot;kind&quot;: &quot;build&quot;,
+        &quot;isDefault&quot;: true
+      },
+      &quot;detail&quot;: &quot;调试器生成的任务。&quot;
+    }
+  ],
+  &quot;version&quot;: &quot;2.0.0&quot;
+}
+</code></pre>
+]]></content>
+        <author>
+            <name>wzh</name>
+            <email>3350782760@qq.com</email>
+            <uri>https://wangzh12023.github.io/blog</uri>
+        </author>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[由一个 docker search 产生的连锁反应]]></title>
+        <id>https://wangzh12023.github.io/blog/blog/docker-search-chain-reaction</id>
+        <link href="https://wangzh12023.github.io/blog/blog/docker-search-chain-reaction"/>
+        <updated>2024-08-22T00:00:00.000Z</updated>
+        <content type="html"><![CDATA[<p>有时候菜的想发颠。</p>
+<p>网络问题总是层出不穷，dns解析不了，docker无法拉取镜像源...
+莫名其妙的改了VMware的虚拟网络设置和Ubuntu的Ip&amp;DNS。结果一顿操作给干连不了网了，<code>docker search &lt;&gt;</code> 显示：</p>
+<p><code>Error response from daemon: Get &quot;https://index.docker.io/v1/search?q=nginx&amp;n=25&quot;: dial tcp: lookup index.docker.io on 8.8.4.4:53: read udp 192.168.1.11:37017-&gt;8.8.4.4:53: i/o timeout</code></p>
+<p>查询后发现需要配置镜像源：</p>
+<pre><code>vim /etc/docker/darmon.json
+{
+     &quot;registry-mirrors&quot;:[
+                &quot;...&quot;
+        ]
+}
+
+# 重启一下
+systemctl daemon-reloa
+systemctl restart docker
+</code></pre>
+<p>经配置镜像源后问题似乎得到了...似乎产生了新的问题。
+<code>ping bing.com</code> 显示<code>ping: bing.com: Temporary failure in name resolution</code>，经过查询是DNS解析问题，先通过<code>vim /etc/resolv.conf</code>配置了两个DNS：</p>
+<pre><code>nameserver 8.8.8.8
+nameserver 8.8.4.4
+</code></pre>
+<p>嘿，结果不行。由于昨夜头脑比较混乱，第二天打开虚拟网络设置-&gt;for i in all network: delete-&gt;应用-&gt;还原默认设置-&gt;重新配置虚拟机的网络为&quot;桥接&quot;，参考<a href="https://stackoverflow.com/questions/53687051/linux-command-line-error-message-temporary-failure-in-name-resolution">stackoverflow</a>，将answer中的DNS部分替换为上面的dns，结果成功ping成功，并且成功search到docker镜像，但是问题就像趵突泉的泉水一样，一直涌现，在<code>docker pull &lt;&gt;</code>拉取镜像的时候又提示超时：</p>
+<pre><code>error pulling image configuration: download failed after attempts=6: dial tcp &lt;...&gt;
+</code></pre>
+<p>这是为什么呢？明明可以<code>search</code> 却不能<code>pull</code>??能<code>search</code>说明是能够连接到docker hub的，但是pull的时候超时又说明访问有问题，经过排查后，借鉴<a href="https://www.cnblogs.com/lxzcloud/p/18354640">这篇博客</a> 后，发现最终还是镜像源问题，更改镜像源后问题解决。</p>
+]]></content>
+        <author>
+            <name>wzh</name>
+            <email>3350782760@qq.com</email>
+            <uri>https://wangzh12023.github.io/blog</uri>
+        </author>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Use zsh terminal]]></title>
+        <id>https://wangzh12023.github.io/blog/blog/use-zsh-terminal</id>
+        <link href="https://wangzh12023.github.io/blog/blog/use-zsh-terminal"/>
+        <updated>2024-08-11T00:00:00.000Z</updated>
+        <content type="html"><![CDATA[<p>One day I find that the terminal style between mine and other&#39;s are different and I wonder how they do that, so, then I find zsh</p>
+<ul>
+<li>Install zsh</li>
+</ul>
+<pre><code class="language-shell">sudo apt install zsh
+#使用镜像源安装oh-my-zsh
+sh -c &quot;$(curl -fsSL https://gitee.com/mirrors/oh-my-zsh/raw/master/tools/install.sh)&quot;
+#编辑theme主题
+vim ~/.zshrc
+# ZSH_THEME=&quot;powerlevel10k/powerlevel10k&quot;
+</code></pre>
+<ul>
+<li>We may also need to config windows terminal&#39;s file<code>settings.json</code></li>
+</ul>
+]]></content>
+        <author>
+            <name>wzh</name>
+            <email>3350782760@qq.com</email>
+            <uri>https://wangzh12023.github.io/blog</uri>
+        </author>
+    </entry>
+</feed>
