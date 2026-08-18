@@ -15,11 +15,11 @@ Author:
   email: ""
 params:
   brand: HOME
-  avatarURL: /images/avatar.png
+  avatarURL: images/avatar-eyes.png
   author: wzh
   authorDescription: 记录技术学习、工具分享与个人思考
   info: 一个分享技术文章、效率工具与个人见解的博客
-  favicon: /images/avatar.png
+  favicon: images/avatar.png
   mainSections:
     - blog
     - art
@@ -39,7 +39,7 @@ params:
       category_id: DIC_kwDOT8Xh4M4DDpPe
       mapping: pathname
       position: top
-      lang: zh
+      lang: zh-CN
   analytics:
     google:
       SiteVerificationTag: xxx
