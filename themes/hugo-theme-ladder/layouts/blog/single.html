@@ -1,14 +1,13 @@
 {{ define "content" }}
-<article class="blog-single">
+<article class="blog-single blog-single--with-toc">
+  <div class="blog-main">
   <header class="blog-title">
     <h1>{{ .Title }}</h1>
   </header>
 
   {{ partial "blog/meta.html" . }}
 
-  <div class="blog-toc">
-    {{ partial "blog/toc.html" . }}
-  </div>
+  {{ partial "blog/chapter-toc.html" (dict "page" . "variant" "mobile") }}
 
   <section class="blog-content">{{ .Content }}</section>
 
@@ -35,6 +34,9 @@
   {{ partial "blog/series.html" . }}
   {{ partial "common/utteranc.html" . }}
   {{ partial "common/giscus.html" . }}
+  </div>
+
+  {{ partial "blog/chapter-toc.html" (dict "page" . "variant" "desktop") }}
 </article>
 
 {{ end }}

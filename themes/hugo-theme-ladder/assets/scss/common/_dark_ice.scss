@@ -106,6 +106,23 @@ $color-dark-code-bg: #202020;
   }
 }
 
+[icy-dark-mode] body .chapter-toc {
+  border-color: $color-dark-line;
+
+  a {
+    color: $gray-500;
+  }
+
+  a:hover,
+  a.is-active {
+    color: $color-dark-cyan;
+  }
+
+  a.is-active {
+    border-left-color: $color-dark-cyan;
+  }
+}
+
 [icy-dark-mode] .top-link {
   background: $border-dark;
 }

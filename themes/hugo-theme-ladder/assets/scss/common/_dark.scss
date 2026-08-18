@@ -84,6 +84,23 @@
   }
 }
 
+[data-dark-mode] body .chapter-toc {
+  border-color: $border-dark;
+
+  a {
+    color: $gray-500;
+  }
+
+  a:hover,
+  a.is-active {
+    color: $body-color-dark;
+  }
+
+  a.is-active {
+    border-left-color: $body-color-dark;
+  }
+}
+
 [data-dark-mode] .top-link {
   background: $border-dark;
 }

@@ -1,0 +1,16 @@
+{{- $page := .page -}}
+{{- $variant := .variant -}}
+{{- $toc := $page.TableOfContents -}}
+{{- if strings.Contains $toc "<li>" -}}
+  {{- if eq $variant "mobile" -}}
+  <details class="chapter-toc chapter-toc--mobile">
+    <summary>本章目录</summary>
+    {{ $toc }}
+  </details>
+  {{- else -}}
+  <aside class="chapter-toc chapter-toc--desktop" aria-label="本章目录">
+    <h2 class="chapter-toc__title">本章目录</h2>
+    {{ $toc }}
+  </aside>
+  {{- end -}}
+{{- end -}}
