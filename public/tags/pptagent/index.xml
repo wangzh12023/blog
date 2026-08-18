@@ -1,0 +1,1093 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>PPTAgent on WZH 的博客</title>
+    <link>http://localhost:1313/tags/pptagent/</link>
+    <description>Recent content in PPTAgent on WZH 的博客 created by </description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>zh</language>
+    <managingEditor>wzh</managingEditor>
+    <webMaster>wzh</webMaster>
+    <copyright>2026 WZH All rights reserved</copyright>
+    <lastBuildDate>Sat, 15 Aug 2026 00:00:00 +0000</lastBuildDate><atom:link href="http://localhost:1313/tags/pptagent/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>PPTAgent 与 DeepPresenter：论文讲解、代码解析与 Agent Harness 架构</title>
+      <link>http://localhost:1313/blog/pptagent-deeppresenter/</link>
+      <pubDate>Sat, 15 Aug 2026 00:00:00 +0000</pubDate>
+      <author>wzh</author>
+      <guid>http://localhost:1313/blog/pptagent-deeppresenter/</guid>
+      <description>&lt;blockquote&gt;
+&lt;p&gt;本文结合 &lt;code&gt;paper/&lt;/code&gt; 目录下的两篇论文（&lt;code&gt;2501.03936.pdf&lt;/code&gt; — PPTAgent，&lt;code&gt;2602.22839.pdf&lt;/code&gt; — DeepPresenter）、&lt;code&gt;PPTAgent/&lt;/code&gt; 仓库代码（&lt;code&gt;pptagent/&lt;/code&gt; 旧版核心库 + &lt;code&gt;deeppresenter/&lt;/code&gt; 当前运行时）以及 &lt;code&gt;PPTea-main/&lt;/code&gt; 评测/实验代码，对两代系统的生成流程、评测流程、Agent Harness 主循环与框架架构进行系统讲解，并与&amp;quot;直接让 CodeX/LLM 生成 PPT&amp;quot;的方式做对比。&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;h2 id=&#34;1-项目背景与两代系统总览&#34;&gt;1. 项目背景与两代系统总览&lt;/h2&gt;
+&lt;p&gt;仓库 &lt;code&gt;PPTAgent/&lt;/code&gt;（https://github.com/icip-cas/PPTAgent）包含两代论文的完整代码：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;维度&lt;/th&gt;
+					&lt;th&gt;&lt;strong&gt;PPTAgent&lt;/strong&gt;&lt;/th&gt;
+					&lt;th&gt;&lt;strong&gt;DeepPresenter&lt;/strong&gt;&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;论文&lt;/td&gt;
+					&lt;td&gt;&amp;ldquo;PPTAgent: Generating and Evaluating Presentations Beyond Text-to-Slides&amp;rdquo;（EMNLP 2025）&lt;/td&gt;
+					&lt;td&gt;&amp;ldquo;DeepPresenter: Environment-Grounded Reflection for Agentic Presentation Generation&amp;rdquo;（ACL 2026）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;arXiv 编号&lt;/td&gt;
+					&lt;td&gt;2501.03936&lt;/td&gt;
+					&lt;td&gt;2602.22839&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;核心思想&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;两阶段、基于编辑&lt;/strong&gt;（edit-based）：先分析参考演示文稿提取布局与模式，再通过编辑动作修改参考幻灯片&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;双智能体 + 环境接地反思&lt;/strong&gt;：Researcher 自主调研写文稿，Presenter 自由式设计 HTML 幻灯片，通过 &lt;code&gt;inspect&lt;/code&gt; 观察渲染产物进行反思修正&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;生成范式&lt;/td&gt;
+					&lt;td&gt;模板复用/编辑式：在已有 PPTX 参考模板上执行编辑 API&lt;/td&gt;
+					&lt;td&gt;自由式（free-form）：从零写 HTML/CSS，渲染为图片再转 PPTX&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;依赖&lt;/td&gt;
+					&lt;td&gt;参考演示文稿（reference presentation）+ 输入文档&lt;/td&gt;
+					&lt;td&gt;用户指令 +（可选附件）+ 网络检索 + 工具环境&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;角色&lt;/td&gt;
+					&lt;td&gt;planner / content_organizer / layout_selector / editor / coder / schema_extractor&lt;/td&gt;
+					&lt;td&gt;Researcher（调研+文稿）、Presenter（视觉设计），可选 Planner、SubAgent&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;评测&lt;/td&gt;
+					&lt;td&gt;PPTEval：Content / Design / Coherence 三维度（MLLM-as-a-judge）&lt;/td&gt;
+					&lt;td&gt;Constraint（规则验证）/ Content / Style 三维度 + Diversity（Vendi Score），GPT-5 作为 judge&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;对应代码&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/&lt;/code&gt;（旧版核心库）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/&lt;/code&gt;（当前运行时）+ &lt;code&gt;PPTea-main/sarl/&lt;/code&gt;（评测）&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;&lt;strong&gt;时间线关系&lt;/strong&gt;：PPTAgent 是 2025 年 1 月开源的初代系统（基于编辑 API 的两阶段方案）；DeepPresenter 是 2025 年 12 月发布的重构版（&amp;ldquo;Agentic&amp;rdquo; 方案），保留了 &lt;code&gt;pptagent&lt;/code&gt; 作为 MCP server（&lt;code&gt;pptagent-mcp&lt;/code&gt;）供新系统调用。&lt;code&gt;deeppresenter/&lt;/code&gt; 是当前的主产品面，&lt;code&gt;pptagent/&lt;/code&gt; 是仍在包内、但主要用于 MCP server 入口的旧核心库。&lt;/p&gt;
+&lt;hr&gt;
+&lt;h2 id=&#34;2-pptagent两阶段编辑式生成&#34;&gt;2. PPTAgent：两阶段编辑式生成&lt;/h2&gt;
+&lt;h3 id=&#34;21-问题定义与核心思想&#34;&gt;2.1 问题定义与核心思想&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;传统范式（text-to-slides）&lt;/strong&gt; 把生成演示文稿当作&amp;quot;从文档做抽象式摘要&amp;quot;，用预定义规则或模板把 LLM 输出转成幻灯片：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;S = {e1, e2, ..., en} = f(C)        （公式 1：从内容 C 生成 n 个幻灯片元素）
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;其中每个元素要手动指定类型、内容、样式属性（如 &lt;code&gt;(Textbox, &amp;quot;Hello&amp;quot;, {border, size, position...})&lt;/code&gt;）。这种方式的缺陷：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;需要手工指定样式属性，自动化困难；&lt;/li&gt;
+&lt;li&gt;输出文本密集、版式单调（图 1 右侧：Content: Tedious Text / Design: Boring layout / Coherence: Abrupt Start）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;strong&gt;PPTAgent 的核心洞察&lt;/strong&gt;：人类制作 PPT 的流程通常是——&lt;strong&gt;挑选优秀的示例幻灯片作为参考，然后把关键内容总结并迁移到这些参考幻灯片上&lt;/strong&gt;（Duarte, 2010）。因此 PPTAgent 把幻灯片生成分解为：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;A = {a1, a2, ..., am} = g(C, Rj)    （公式 2：给定内容 C 与第 j 个参考幻灯片 Rj，生成 m 个可执行编辑动作）
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;即：&lt;strong&gt;不是从零创建幻灯片，而是在参考幻灯片上执行一系列可执行的编辑动作&lt;/strong&gt;（如 replace_span、replace_image 等），从而保留参考幻灯片精心设计的版式与风格。&lt;/p&gt;
+&lt;p&gt;论文的三大贡献：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;PPTAgent&lt;/strong&gt;：把自动演示文稿生成重新定义为&amp;quot;以参考演示文稿为引导的编辑式过程&amp;quot;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;PPTEval&lt;/strong&gt;：三维度（Content / Design / Coherence）的评测框架；&lt;/li&gt;
+&lt;li&gt;发布 &lt;strong&gt;Zenodo10K&lt;/strong&gt; 数据集（从 Zenodo 爬取的 10,448 份跨领域演示文稿）。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;22-stage-ipresentation-analysis演示文稿分析&#34;&gt;2.2 Stage I：Presentation Analysis（演示文稿分析）&lt;/h3&gt;
+&lt;p&gt;对应代码：&lt;code&gt;pptagent/induct.py&lt;/code&gt;（&lt;code&gt;SlideInducter&lt;/code&gt; 类）与 &lt;code&gt;pptagent/model_utils.py&lt;/code&gt;（聚类算法）。&lt;/p&gt;
+&lt;p&gt;目标：分析参考演示文稿，提取&lt;strong&gt;幻灯片的版面类型（functional type）与内容模式（content schema）&lt;/strong&gt;，为后续的参考选择与幻灯片生成提供指导。&lt;/p&gt;
+&lt;h4 id=&#34;step-1幻灯片分类slide-clustering&#34;&gt;Step 1：幻灯片分类（Slide Clustering）&lt;/h4&gt;
+&lt;p&gt;幻灯片按功能分为两类：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;结构型幻灯片（structural slides）&lt;/strong&gt;：支撑演示文稿组织的（如开场、目录、章节页、结尾）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;内容型幻灯片（content slides）&lt;/strong&gt;：传达具体信息的（如要点页）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;分类方法（论文 2.2 节）：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;结构型&lt;/strong&gt;：用 LLM 的长上下文能力分析整份演示文稿的文本，识别结构型幻灯片、标注其结构角色（Opening / TOC / Section Outline / Ending）并按功能分组。对应 &lt;code&gt;induct.py&lt;/code&gt; 的 &lt;code&gt;category_split()&lt;/code&gt;（&lt;code&gt;induct.py:95-110&lt;/code&gt;），使用 &lt;code&gt;prompts/category_split.txt&lt;/code&gt;，输出 &lt;code&gt;functional_cluster&lt;/code&gt;（类别 → 幻灯片索引列表）与 &lt;code&gt;content_slides_index&lt;/code&gt;。&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;内容型&lt;/strong&gt;：把幻灯片转成图片，用 ViT 做分层聚类（hierarchical clustering）把相似版面聚到一起。对应 &lt;code&gt;layout_split()&lt;/code&gt;（&lt;code&gt;induct.py:112-151&lt;/code&gt;）：
+&lt;ol&gt;
+&lt;li&gt;用 ViT（&lt;code&gt;google/vit-base-patch16-224-in21k&lt;/code&gt;）对模板图片提取 embedding（&lt;code&gt;get_image_embedding()&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;按 &lt;code&gt;(layout_name, content_type)&lt;/code&gt;（text/image）预分组；&lt;/li&gt;
+&lt;li&gt;组内两两计算余弦相似度（&lt;code&gt;images_cosine_similarity()&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;用贪婪聚合聚类 &lt;code&gt;get_cluster()&lt;/code&gt;（&lt;code&gt;model_utils.py:291-345&lt;/code&gt;）聚类，相似度阈值 &lt;code&gt;sim_bound=0.65&lt;/code&gt;（论文 Algorithm 1）——聚类前把文本替换为占位符 &amp;ldquo;a&amp;rdquo;、图片替换为纯色背景以只关注版面；&lt;/li&gt;
+&lt;li&gt;每簇选 shape 最多的幻灯片作为模板幻灯片；&lt;/li&gt;
+&lt;li&gt;用视觉模型（&lt;code&gt;ASK_CATEGORY_PROMPT&lt;/code&gt;）生成一行版面模式描述（如 &amp;ldquo;One Large Left-Aligned Image with a Right-Aligned Text Block&amp;rdquo;），并追加 &lt;code&gt;:text&lt;/code&gt; 或 &lt;code&gt;:image&lt;/code&gt; 后缀。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h4 id=&#34;step-2schema-提取schema-extraction&#34;&gt;Step 2：Schema 提取（Schema Extraction）&lt;/h4&gt;
+&lt;p&gt;对每个版面，取其模板幻灯片，提取所有段落文本与图片描述，调用 &lt;code&gt;schema_extractor&lt;/code&gt; 智能体生成结构化 JSON schema（&lt;code&gt;content_induct()&lt;/code&gt;，&lt;code&gt;induct.py:175-208&lt;/code&gt;）。每个元素用 &lt;code&gt;(category, description, content)&lt;/code&gt; 表示，例如：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;Category   Description              Data
+Title      Main title               Sample Library
+Date       Date of the event        15 February 2018
+Image      Primary image to          Picture: Children in a li-
+           illustrate the slide     brary with ...
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;对应数据模型：&lt;code&gt;pptagent/presentation/layout.py&lt;/code&gt; 中的 &lt;code&gt;Element&lt;/code&gt;（name/data/type/suggested_characters/variable_length）与 &lt;code&gt;Layout&lt;/code&gt;。Stage I 的最终产物是 &lt;code&gt;slide_induction.json&lt;/code&gt;（见 &lt;code&gt;scripts/template_induct.py&lt;/code&gt; 与 &lt;code&gt;templates/*/slide_induction.json&lt;/code&gt;），包含每个版式的 elements、template_id、slides、functional_keys 与语言检测结果。&lt;/p&gt;
+&lt;h3 id=&#34;23-stage-iipresentation-generation演示文稿生成&#34;&gt;2.3 Stage II：Presentation Generation（演示文稿生成）&lt;/h3&gt;
+&lt;p&gt;对应代码：&lt;code&gt;pptagent/pptgen.py&lt;/code&gt;（&lt;code&gt;PPTGen&lt;/code&gt; 抽象基类与 &lt;code&gt;PPTAgent&lt;/code&gt; 具体实现）。&lt;/p&gt;
+&lt;h4 id=&#34;step-1大纲生成outline-generation&#34;&gt;Step 1：大纲生成（Outline Generation）&lt;/h4&gt;
+&lt;p&gt;用 LLM 生成结构化大纲（&lt;code&gt;generate_outline()&lt;/code&gt;，&lt;code&gt;pptgen.py:239-256&lt;/code&gt;），每个条目对应一张新幻灯片，包含：&lt;strong&gt;参考幻灯片（基于 Stage I 的功能描述选择）+ 该幻灯片相关的文档内容&lt;/strong&gt;。大纲以结构化输出（&lt;code&gt;Outline.response_model(source_doc)&lt;/code&gt;，见 &lt;code&gt;response/outline.py&lt;/code&gt;）生成。&lt;/p&gt;
+&lt;p&gt;随后 &lt;code&gt;_add_functional_layouts()&lt;/code&gt;（&lt;code&gt;pptgen.py:267-318&lt;/code&gt;）自动插入结构型幻灯片：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;TOC（目录）与 Opening（开场）插在位置 0；&lt;/li&gt;
+&lt;li&gt;Ending（结尾）插在最后；&lt;/li&gt;
+&lt;li&gt;每个新主题章节前插入 Section Outline（章节页）；&lt;/li&gt;
+&lt;li&gt;用 &lt;code&gt;edit_distance&lt;/code&gt; 模糊匹配参考稿中对应的功能版式名。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h4 id=&#34;step-2幻灯片生成slide-generation编辑式流水线&#34;&gt;Step 2：幻灯片生成（Slide Generation）——编辑式流水线&lt;/h4&gt;
+&lt;p&gt;&lt;code&gt;generate_slide()&lt;/code&gt;（&lt;code&gt;pptgen.py:392-432&lt;/code&gt;）对大纲中的每个条目执行：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;选择版面&lt;/strong&gt; &lt;code&gt;_select_layout()&lt;/code&gt;（&lt;code&gt;pptgen.py:434-467&lt;/code&gt;）：先用 &lt;code&gt;content_organizer&lt;/code&gt; 从检索内容中提取关键点，再由 &lt;code&gt;layout_selector&lt;/code&gt; 根据内容与图片匹配情况选择最佳版式（&lt;code&gt;LayoutChoice.response_model(layouts)&lt;/code&gt; 结构化输出），文本内容选 &lt;code&gt;:text&lt;/code&gt; 版式、含图片的选 &lt;code&gt;:image&lt;/code&gt; 版式。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;生成内容&lt;/strong&gt; &lt;code&gt;_generate_content()&lt;/code&gt;（&lt;code&gt;pptgen.py:469-491&lt;/code&gt;）：&lt;code&gt;editor&lt;/code&gt; 智能体按照 schema 生成结构化内容（&lt;code&gt;EditorOutput.response_model(elements)&lt;/code&gt;），再经 &lt;code&gt;_validate_content()&lt;/code&gt;（&lt;code&gt;pptgen.py:531-571&lt;/code&gt;）校验（图片是否存在、字符数是否超限，超长文本用 &lt;code&gt;length_rewrite()&lt;/code&gt; 改写），最后 &lt;code&gt;_generate_commands()&lt;/code&gt;（&lt;code&gt;pptgen.py:573-589&lt;/code&gt;）把内容差异转成命令序列：对每个元素计算 &lt;code&gt;quantity_change = len(new) - len(old)&lt;/code&gt;，产出 &lt;code&gt;(element_name, type, quantity_change, old_data, new_data)&lt;/code&gt; 命令元组。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;编辑幻灯片&lt;/strong&gt; &lt;code&gt;_edit_slide()&lt;/code&gt;（&lt;code&gt;pptgen.py:493-529&lt;/code&gt;）：这是&lt;strong&gt;自校正 REPL 循环&lt;/strong&gt;——&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;coder&lt;/code&gt; 智能体依据 API 文档（&lt;code&gt;CodeExecutor.get_apis_docs()&lt;/code&gt; 内省 API 签名生成）与模板幻灯片的 HTML 表示，把命令翻译成 API 调用序列；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;CodeExecutor.execute_actions()&lt;/code&gt;（&lt;code&gt;apis.py:127-203&lt;/code&gt;）用 &lt;code&gt;eval(line, SAFE_EVAL_GLOBALS, ...)&lt;/code&gt; 逐行执行 API 调用（&lt;code&gt;replace_paragraph&lt;/code&gt;、&lt;code&gt;replace_image&lt;/code&gt;、&lt;code&gt;del_paragraph&lt;/code&gt;、&lt;code&gt;del_image&lt;/code&gt;、&lt;code&gt;clone_paragraph&lt;/code&gt;），出错则返回 &lt;code&gt;(api_lines, traceback)&lt;/code&gt; 作为反馈；&lt;/li&gt;
+&lt;li&gt;LLM 分析反馈修正动作，最多重试 &lt;code&gt;retry_times&lt;/code&gt;（默认 3）次，直到生成有效幻灯片。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h4 id=&#34;编辑-api-与-html-渲染coderender&#34;&gt;编辑 API 与 HTML 渲染（CodeRender）&lt;/h4&gt;
+&lt;p&gt;论文的关键设计之一：&lt;strong&gt;把参考幻灯片渲染成 HTML 表示&lt;/strong&gt;（&lt;code&gt;SlidePage.to_html()&lt;/code&gt;，&lt;code&gt;presentation.py:193-216&lt;/code&gt;），比直接操作 PPTX 的 XML（1006 行冗长冗余，见论文 Figure 11）更精确直观，让 LLM 能理解元素结构并精确修改。&lt;/p&gt;
+&lt;p&gt;五个编辑 API（&lt;code&gt;pptagent/apis.py&lt;/code&gt;）：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;API&lt;/th&gt;
+					&lt;th&gt;说明&lt;/th&gt;
+					&lt;th&gt;实现位置&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;replace_paragraph&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;替换段落内容（markdown→HTML→TextBlock 富文本解析）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;apis.py:403-438&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;replace_image&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;替换图片资源（等比缩放居中，表格图片转真表格）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;apis.py:441-473&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;del_paragraph&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;删除段落&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;apis.py:357-384&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;del_image&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;删除图片元素&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;apis.py:387-400&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;clone_paragraph&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;复制段落（插入 XML 到末段之后）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;apis.py:476-512&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;&lt;strong&gt;Closure 模式&lt;/strong&gt;：编辑动作不直接应用到 PPTX，而是修改 &lt;code&gt;SlidePage&lt;/code&gt; 表示并排队 &lt;code&gt;Closure&lt;/code&gt; 对象（&lt;code&gt;shapes.py:218-246&lt;/code&gt;），&lt;code&gt;SlidePage.build()&lt;/code&gt; 时按 CLONE → REPLACE/STYLE → DELETE/POST_PROCESS → MERGE 的顺序执行（&lt;code&gt;shapes.py:622-642&lt;/code&gt;）。这保证了删除段落时索引处理的正确性。&lt;/p&gt;
+&lt;h3 id=&#34;24-ppteval-评测框架&#34;&gt;2.4 PPTEval 评测框架&lt;/h3&gt;
+&lt;p&gt;对应代码：&lt;code&gt;pptagent/ppteval/ppteval.py&lt;/code&gt; 与 &lt;code&gt;pptagent/prompts/ppteval/*.txt&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;PPTEval 采用 &lt;strong&gt;MLLM-as-a-judge&lt;/strong&gt; 范式，评估三个维度（1-5 分制）：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;维度&lt;/th&gt;
+					&lt;th&gt;评分标准&lt;/th&gt;
+					&lt;th&gt;评测对象&lt;/th&gt;
+					&lt;th&gt;Prompt&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;Content&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;文本简洁、语法正确、有相关图片支撑&lt;/td&gt;
+					&lt;td&gt;幻灯片级（逐页）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;ppteval_content.txt&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;Design&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;配色和谐、版面可读、视觉元素（几何形状等）提升吸引力&lt;/td&gt;
+					&lt;td&gt;幻灯片级（逐页）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;ppteval_style.txt&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;Coherence&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;结构递进、包含必要的背景信息&lt;/td&gt;
+					&lt;td&gt;整个演示文稿级&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;ppteval_coherence.txt&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;评测流程（&lt;code&gt;ppteval.py&lt;/code&gt;）：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;code&gt;eval_slide()&lt;/code&gt;（&lt;code&gt;ppteval.py:54-82&lt;/code&gt;）：对每张幻灯片图片，先用&lt;strong&gt;视觉模型&lt;/strong&gt;生成内容描述（&lt;code&gt;content_descriptor&lt;/code&gt;）与风格描述（&lt;code&gt;style_descriptor&lt;/code&gt;），再用&lt;strong&gt;文本模型&lt;/strong&gt;分别对描述评分（&lt;code&gt;text_scorer&lt;/code&gt; / &lt;code&gt;vision_scorer&lt;/code&gt;）。这种&amp;quot;&lt;strong&gt;感知（VLM）与判断（LLM）分离&lt;/strong&gt;&amp;ldquo;的设计是 PPTEval 的关键。&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;eval_coherence()&lt;/code&gt;（&lt;code&gt;ppteval.py:85-108&lt;/code&gt;）：提取整份演示文稿文本，先用 &lt;code&gt;ppt_extractor&lt;/code&gt; 抽取幻灯片描述与背景元数据，再用 &lt;code&gt;logic_scorer&lt;/code&gt; 评一致性。&lt;/li&gt;
+&lt;li&gt;聚合：Content/Design 取所有幻灯片的平均分，Coherence 为整体分。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;strong&gt;与人类评分的一致性&lt;/strong&gt;（论文 5.5 节）：招募 4 名研究生评 250 份演示文稿（50 份真实 + 200 份生成），Fleiss&amp;rsquo; Kappa 平均 0.59；Pearson 相关 0.71、Spearman 相关 0.74，显著优于其他评测方法。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;与传统指标对比&lt;/strong&gt;（论文 Figure 7 热力图）：PPL 与 FID 与 Content/Design 几乎不相关（-0.02/-0.09），说明传统指标（PPL、ROUGE-L、FID）无法评估演示文稿质量——KCTV 拿到高 ROUGE-L（16.76）但低 Content（2.55），PPTAgent 则相反。&lt;/p&gt;
+&lt;h3 id=&#34;25-实验结果与消融&#34;&gt;2.5 实验结果与消融&lt;/h3&gt;
+&lt;p&gt;主结果（论文 Table 3，Qwen2.5_LM + Qwen2-VL_VM 配置）：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;方法&lt;/th&gt;
+					&lt;th&gt;SR(%)&lt;/th&gt;
+					&lt;th&gt;Content&lt;/th&gt;
+					&lt;th&gt;Design&lt;/th&gt;
+					&lt;th&gt;Coherence&lt;/th&gt;
+					&lt;th&gt;Avg&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;DocPres（规则）&lt;/td&gt;
+					&lt;td&gt;–&lt;/td&gt;
+					&lt;td&gt;2.98&lt;/td&gt;
+					&lt;td&gt;2.37&lt;/td&gt;
+					&lt;td&gt;3.28&lt;/td&gt;
+					&lt;td&gt;2.87&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;KCTV（模板）&lt;/td&gt;
+					&lt;td&gt;88.0&lt;/td&gt;
+					&lt;td&gt;2.55&lt;/td&gt;
+					&lt;td&gt;2.95&lt;/td&gt;
+					&lt;td&gt;3.36&lt;/td&gt;
+					&lt;td&gt;2.95&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;PPTAgent&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;95.0&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;3.28&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;3.27&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;4.48&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;3.67&lt;/strong&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;消融（论文 Table 4）说明四个组件的贡献：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;w/o CodeRender&lt;/strong&gt;（用 Guo et al. 的表示替换 HTML 渲染）：SR 从 95.0% 掉到 74.6% —— HTML 渲染显著降低交互复杂度；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;w/o Schema&lt;/strong&gt;（去掉 schema 引导）：SR 从 95.0% 掉到 78.8% —— schema 对生成鲁棒性关键；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;w/o Outline / w/o Structure&lt;/strong&gt;：Coherence 从 4.48 掉到 3.36/3.45 —— 大纲与结构型幻灯片分析对连贯性至关重要；&lt;/li&gt;
+&lt;li&gt;自校正机制（论文 Figure 6）：所有模型都能修正超过一半的错误，GPT-4o 自校正能力最强。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;hr&gt;
+&lt;h2 id=&#34;3-deeppresenter环境接地反思的双智能体框架&#34;&gt;3. DeepPresenter：环境接地反思的双智能体框架&lt;/h2&gt;
+&lt;h3 id=&#34;31-动机与核心贡献&#34;&gt;3.1 动机与核心贡献&lt;/h3&gt;
+&lt;p&gt;DeepPresenter 指出现有演示文稿智能体的两个根本缺陷：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;依赖预定义工作流与固定模板&lt;/strong&gt;（如 PPTAgent 的编辑式流程、KCTV 的模板填充），无法适应多样化的用户意图，产出文本密集、研究深度不足、视觉设计与叙事脱节的幻灯片；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;内省式反思（introspective self-reflection）失效&lt;/strong&gt;：智能体操作的是中间表示（HTML/markdown），而用户感知的是&lt;strong&gt;渲染后的产物&lt;/strong&gt;。很多缺陷（图片断裂、元素溢出、低对比度）只在感知状态（渲染后的幻灯片）中显现，内省反思无法察觉。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;三大贡献：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;&lt;strong&gt;DeepPresenter&lt;/strong&gt;：通过共享观察空间协调两个专职智能体（Researcher + Presenter）的智能体框架；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;环境接地反思（Environment-Grounded Reflection）&lt;/strong&gt;：把自校正建立在渲染后产物的感知状态上，而非内部信号上；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;DeepPresenter-9B&lt;/strong&gt;：用&amp;quot;外在验证（extrinsic verification）&amp;ldquo;合成的轨迹进行监督微调，小模型以极低代价接近大模型性能。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;32-任务形式化&#34;&gt;3.2 任务形式化&lt;/h3&gt;
+&lt;p&gt;把演示文稿生成形式化为&lt;strong&gt;交互式智能体任务&lt;/strong&gt;：给定指令 I 与配备工具库 T 和文件系统 F 的智能体环境 E，生成高质量演示文稿 P。生成过程是多步轨迹：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;τ = {(r1, a1, o1), ..., (rT, aT, oT)}
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;每步：智能体生成推理轨迹 r_t，选择动作 a_t ∈ T，从 E 收到观察 o_t。轨迹分解为两个连续阶段：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;τ = τ_R ∘ τ_P
+&lt;/code&gt;&lt;/pre&gt;&lt;ul&gt;
+&lt;li&gt;τ_R：Researcher 轨迹；&lt;/li&gt;
+&lt;li&gt;τ_P：Presenter 轨迹。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;两个智能体通过 F 通信：Researcher 把结构化文稿 M 和相关资产持久化到文件系统，Presenter 消费它们。&lt;/p&gt;
+&lt;h3 id=&#34;33-双智能体协作researcher--presenter&#34;&gt;3.3 双智能体协作：Researcher + Presenter&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;Researcher Agent&lt;/strong&gt;（对应 &lt;code&gt;deeppresenter/agents/research.py&lt;/code&gt; + &lt;code&gt;roles/Research.yaml&lt;/code&gt;）：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;不遵循预定义工作流，而是&lt;strong&gt;自主规划探索&lt;/strong&gt;：执行多步检索（&lt;code&gt;search_web&lt;/code&gt;、&lt;code&gt;search_images&lt;/code&gt;、&lt;code&gt;search_papers&lt;/code&gt;、&lt;code&gt;fetch_url&lt;/code&gt;）、文档解析（&lt;code&gt;convert_to_markdown&lt;/code&gt;）、必要时创建辅助资产（&lt;code&gt;image_generation&lt;/code&gt;、matplotlib 绘图）；&lt;/li&gt;
+&lt;li&gt;探索深度与策略&lt;strong&gt;适配用户意图&lt;/strong&gt;：技术性演讲需要调研相关工作，大众向演讲更重可理解的例子与生动插图；&lt;/li&gt;
+&lt;li&gt;最终把内容组织成按叙事流排布的结构化 Markdown 文稿 M（用 &lt;code&gt;---&lt;/code&gt; 分页，图片本地化并相对路径引用），持久化到 F；&lt;/li&gt;
+&lt;li&gt;通过 &lt;code&gt;inspect_manuscript&lt;/code&gt; 获取文稿诊断（页数、语言、图片资源可用性），最后调用 &lt;code&gt;finalize&lt;/code&gt; 返回文稿路径。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;strong&gt;Presenter Agent&lt;/strong&gt;（对应 &lt;code&gt;deeppresenter/agents/design.py&lt;/code&gt; + &lt;code&gt;roles/Design.yaml&lt;/code&gt;）：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;不填充预定义模板，而是&lt;strong&gt;从零生成幻灯片&lt;/strong&gt;；&lt;/li&gt;
+&lt;li&gt;先制定全局设计计划（&lt;code&gt;designplan&lt;/code&gt;：配色、字体、网格系统、字号规范），建立与主题共鸣的视觉基调（可持续主题用大地色系、学术教程用极简布局）；&lt;/li&gt;
+&lt;li&gt;把每张幻灯片生成为独立的 HTML 文件（&lt;code&gt;slides/slide_01.html&lt;/code&gt;、&lt;code&gt;slide_02.html&lt;/code&gt;&amp;hellip;），遵循设计计划把文稿内容翻译成视觉元素；&lt;/li&gt;
+&lt;li&gt;每张幻灯片生成后调用 &lt;code&gt;inspect_slide&lt;/code&gt;（渲染成像素图片）观察后渲染缺陷（溢出、重叠、低对比度），用 &lt;code&gt;thinking&lt;/code&gt;（模型原生推理）规划针对性修改，然后 &lt;code&gt;edit&lt;/code&gt; 修复；&lt;/li&gt;
+&lt;li&gt;全部完成后 &lt;code&gt;finalize&lt;/code&gt; 返回幻灯片目录。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;strong&gt;多智能体并行扩展&lt;/strong&gt;（&lt;code&gt;main.py&lt;/code&gt; 中 &lt;code&gt;multiagent_mode&lt;/code&gt;）：父智能体可通过 &lt;code&gt;delegate_subagent&lt;/code&gt; 本地工具把长文档/多主题调研、&amp;gt;=3 张幻灯片的批量生成&lt;strong&gt;并行委派&lt;/strong&gt;给隔离工作区中的 SubAgent 实例（&lt;code&gt;agents/subagent.py&lt;/code&gt;，max_turns=10），结果通过文件 + &lt;code&gt;finalize&lt;/code&gt; 回传。论文 Figure 8(a) 的工具使用分析证实了角色分工：Researcher 大量使用 Retrieve 类工具（26.8%），Presenter 大量使用 File（40%）与 Reason（19.3%）类工具。&lt;/p&gt;
+&lt;h3 id=&#34;34-环境接地反思environment-grounded-reflection&#34;&gt;3.4 环境接地反思（Environment-Grounded Reflection）&lt;/h3&gt;
+&lt;p&gt;这是 DeepPresenter 最核心的方法论创新（论文 Figure 2 对比）：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;&lt;/th&gt;
+					&lt;th&gt;自反思（Self-Reflection）&lt;/th&gt;
+					&lt;th&gt;环境接地反思（Env-Grounded Reflection）&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;触发&lt;/td&gt;
+					&lt;td&gt;不确定性（Uncertain ❓）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;inspect&lt;/code&gt; 工具调用&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;输入&lt;/td&gt;
+					&lt;td&gt;内部信号（无外部观察）&lt;/td&gt;
+					&lt;td&gt;渲染后的幻灯片图像 / 文稿诊断&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;缺陷&lt;/td&gt;
+					&lt;td&gt;发现不了后渲染缺陷（溢出、重叠、低对比度、断裂图片）&lt;/td&gt;
+					&lt;td&gt;能发现&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;实现上是 &lt;strong&gt;&lt;code&gt;inspect&lt;/code&gt; 工具&lt;/strong&gt;作为显式的观察接口（&lt;code&gt;deeppresenter/tools/reflect.py&lt;/code&gt;）：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;inspect_slide(html_file, aspect_ratio)&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;reflect.py:28-62&lt;/code&gt;）：用 Node 管道（html2pptx）校验 HTML 合法性；若 &lt;code&gt;REFLECTIVE_DESIGN&lt;/code&gt;（&lt;code&gt;design_agent&lt;/code&gt; 是多模态且 &lt;code&gt;heavy_reflect&lt;/code&gt;）开启，还用 Playwright 把 HTML 渲染为 PDF→JPEG，以 &lt;code&gt;ImageContent&lt;/code&gt;（base64 JPEG）返回给多模态设计智能体，使其&lt;strong&gt;真正&amp;quot;看到&amp;quot;渲染后的幻灯片&lt;/strong&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;inspect_manuscript(md_file)&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;reflect.py:66-117&lt;/code&gt;）：解析 Markdown 文稿，统计页数、用 fastText LID 模型检测语言、校验所有图片引用（标记外链、缺失文件、缺失 alt 文本、重复使用），返回结构化诊断。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;由此形成 &lt;strong&gt;observe（观察）→ reflect（反思）→ revise（修正）&lt;/strong&gt; 闭环，观察结果与用户感知一致。&lt;/p&gt;
+&lt;p&gt;论文中的 &lt;code&gt;think&lt;/code&gt; 工具并非一个注册的 MCP 工具，而是通过：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;模型原生的 reasoning 字段（&lt;code&gt;ChatMessage.reasoning&lt;/code&gt;，&lt;code&gt;agent.py:183-186&lt;/code&gt; 保留）；&lt;/li&gt;
+&lt;li&gt;Agent Harness 本身的 think-act-observe 循环结构实现。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;35-数据合成与轨迹蒸馏deeppresenter-9b&#34;&gt;3.5 数据合成与轨迹蒸馏（DeepPresenter-9B）&lt;/h3&gt;
+&lt;p&gt;为了在推理时降低闭源模型的高成本，DeepPresenter 训练了紧凑模型 DeepPresenter-9B。训练管线（论文 Figure 3）三步：&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Step 1：任务构建（Query Construction）&lt;/strong&gt;
+从 PersonaHub、arXiv、FinePDFs-Edu 三来源构建 1,152 个任务（1,024 训练 + 128 评测）。每个任务附加&lt;strong&gt;可验证约束&lt;/strong&gt;（页数、语言、宽高比），如：&amp;ldquo;I&amp;rsquo;m an English teacher&amp;hellip; Please create a 14-slide presentation in 4:3 aspect ratio, with all content in Chinese.&amp;quot;（统计见论文 Table 1：中英各半、三来源各半、自由/受限宽高比混合）。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Step 2：验证引导的轨迹合成（Verification-Guided Trajectory Synthesis）&lt;/strong&gt;
+关键问题：&lt;strong&gt;自验证偏差（self-verification bias）&lt;/strong&gt;——智能体在自己产生的轨迹状态内评判自己的输出，验证与自我合理化纠缠，导致有缺陷的输出被接受。
+解决方案：&lt;strong&gt;外在验证（extrinsic verification）&lt;/strong&gt;——在隔离上下文中产生验证信号。智能体调用 &lt;code&gt;inspect&lt;/code&gt; 得到观察 o_t 后，&lt;strong&gt;独立的 critic 模型&lt;/strong&gt;（论文用 Gemini-3-Pro，&lt;code&gt;PPTea-main/sarl/coldstart/process_oversight.py&lt;/code&gt; 实现）基于 o_t 与中间产物做验证，输出识别缺陷（如低对比度）并给出可操作修改建议（如调整文字颜色）的推理轨迹，作为 &lt;code&gt;think&lt;/code&gt; 调用注入智能体上下文，引导其修正后继续 rollout。
+论文 Figure 4 显示外在验证在各类缺陷（尤其是版面 layout 308 vs 212、渲染 render 101 vs 43）上检出数量远超自验证，说明自验证系统性漏检。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Step 3：轨迹过滤（Trajectory Filtering）&lt;/strong&gt;
+三级过滤（&lt;code&gt;PPTea-main/sarl/evaluation/&lt;/code&gt; 中的评分 + &lt;code&gt;trajectory_collect.py&lt;/code&gt; 的阈值）：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;规则验证约束符合度（页数/宽高比/语言）；&lt;/li&gt;
+&lt;li&gt;用 GLM-4.6 评估一致性，删除未按外在验证轨迹做对齐修改的（反思-动作不一致）轨迹；&lt;/li&gt;
+&lt;li&gt;用 GLM-4.6V 评估输出质量，过滤有关键缺陷（元素重叠、图片断裂）的轨迹。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;最终 802 条轨迹通过过滤，在 GLM-4.6V-Flash 上用 MS-SWIFT 微调（batch 32、lr 1e-5、5 epochs、8×A800 约 80 GPU 小时），得到 DeepPresenter-9B。&lt;/p&gt;
+&lt;p&gt;论文 Figure 5 展示过滤前的失败分布：质量错误 43.0%（自由式生成难保质量）、环境错误 32.3%（长时程脆弱性：上下文溢出与基础设施故障）、约束违规 13.5%、一致性错误 11.2%。&lt;/p&gt;
+&lt;h3 id=&#34;36-实验结果&#34;&gt;3.6 实验结果&lt;/h3&gt;
+&lt;p&gt;评测协议：128 个 held-out 任务，四个维度：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;维度&lt;/th&gt;
+					&lt;th&gt;方法&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;Constraint&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;规则验证：约束满足比例（页数/语言/宽高比），0-5 分&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;Content &amp;amp; Style&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;沿用 Zheng et al. (2025) 的 MLLM 评测框架，GPT-5 为 judge，0-5 分&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;Diversity&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;DINOv2 特征 + Vendi Score（特征相似矩阵的特征值熵），0-1&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;主结果（论文 Table 2）：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;框架&lt;/th&gt;
+					&lt;th&gt;模型&lt;/th&gt;
+					&lt;th&gt;Constraint&lt;/th&gt;
+					&lt;th&gt;Content&lt;/th&gt;
+					&lt;th&gt;Style&lt;/th&gt;
+					&lt;th&gt;Avg&lt;/th&gt;
+					&lt;th&gt;Diversity&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;Gamma（商业）&lt;/td&gt;
+					&lt;td&gt;–&lt;/td&gt;
+					&lt;td&gt;4.93&lt;/td&gt;
+					&lt;td&gt;4.08&lt;/td&gt;
+					&lt;td&gt;4.08&lt;/td&gt;
+					&lt;td&gt;4.36&lt;/td&gt;
+					&lt;td&gt;0.52&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;PPTAgent&lt;/td&gt;
+					&lt;td&gt;Gemini-3-Pro&lt;/td&gt;
+					&lt;td&gt;4.22&lt;/td&gt;
+					&lt;td&gt;3.09&lt;/td&gt;
+					&lt;td&gt;4.30&lt;/td&gt;
+					&lt;td&gt;3.87&lt;/td&gt;
+					&lt;td&gt;0.19&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;KCTV&lt;/td&gt;
+					&lt;td&gt;Claude-Sonnet-4.5&lt;/td&gt;
+					&lt;td&gt;4.88&lt;/td&gt;
+					&lt;td&gt;2.90&lt;/td&gt;
+					&lt;td&gt;3.99&lt;/td&gt;
+					&lt;td&gt;3.92&lt;/td&gt;
+					&lt;td&gt;0.20&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;DeepPresenter&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;Gemini-3-Pro&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;4.70&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;4.25&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;4.37&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;4.44&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;0.79&lt;/strong&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;strong&gt;DeepPresenter-9B&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;微调&lt;/td&gt;
+					&lt;td&gt;4.77&lt;/td&gt;
+					&lt;td&gt;3.52&lt;/td&gt;
+					&lt;td&gt;4.29&lt;/td&gt;
+					&lt;td&gt;4.19&lt;/td&gt;
+					&lt;td&gt;0.53&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;要点：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;DeepPresenter + Gemini-3-Pro 达到 SOTA（4.44），超过商业系统 Gamma（4.36）与所有开源基线；&lt;/li&gt;
+&lt;li&gt;Content 提升最大：Researcher 做意图自适应检索与综合，而非依赖固定工作流或用户提供材料；&lt;/li&gt;
+&lt;li&gt;Style 提升来自内容感知设计与环境接地反思；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Diversity 0.79 是模板方法的 2 倍以上&lt;/strong&gt;（0.17-0.35），自由式生成带来视觉多样性；&lt;/li&gt;
+&lt;li&gt;DeepPresenter-9B 以 802 条轨迹达到 4.19，超过所有开源基线，接近 GPT-5（4.22）而成本低得多（论文 Figure 6 的帕累托前沿）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;消融（论文 Table 3，Gemini-3-Pro）：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;w/o Grounded Reflection：4.44 → 4.32（关闭 inspect 后反思局限在渲染前产物）；&lt;/li&gt;
+&lt;li&gt;w/o Dual-Agent：4.44 → 4.04（双智能体把长时程执行分解为专业化子任务贡献显著）；&lt;/li&gt;
+&lt;li&gt;训练策略：w/o Trajectory Filtering 使 DeepPresenter-9B 从 4.19 → 4.03；extrinsic verification 带来比纯微调高 67% 的提升（Table 4：+0.20 vs +0.12）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;人类评估（附录 A.1，2 名研究生评 32 份）：DeepPresenter 4.22 vs PPTAgent 3.46 / KCTV 3.48 / Gamma 4.09，相对排序与自动评测一致。&lt;/p&gt;
+&lt;hr&gt;
+&lt;h2 id=&#34;4-代码架构总览两条代码路径&#34;&gt;4. 代码架构总览：两条代码路径&lt;/h2&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;PPTAgent/  （仓库根目录）
+├── deeppresenter/          ← 当前主产品面（Agentic 运行时）
+│   ├── main.py             ← AgentLoop 编排入口
+│   ├── agents/             ← 智能体（agent.py 基类 + research/design/pptagent/planner/subagent）
+│   ├── tools/              ← MCP 工具服务器（search/any2markdown/reflect/task/tool_agents）
+│   ├── roles/              ← 角色定义（Research.yaml/Design.yaml/PPTAgent.yaml/Planner.yaml/SubAgent.yaml）
+│   ├── utils/              ← 配置/常量/日志/webview/mineru/mcp_client
+│   ├── html2pptx/          ← Node.js HTML→PPTX 转换管道
+│   ├── cli/                ← Typer CLI（onboard/generate/serve/config/clean）
+│   └── docker/             ← 沙箱 Docker 镜像与本地运行脚本
+│
+├── pptagent/               ← 旧版核心库（PPTAgent 论文的生成+评测）
+│   ├── pptgen.py           ← Stage II 生成流水线（PPTGen/PPTAgent）
+│   ├── induct.py           ← Stage I 版面归纳（SlideInducter）
+│   ├── apis.py             ← 编辑 API 与 CodeExecutor
+│   ├── agent.py            ← 通用 LLM 智能体（YAML 角色 + Jinja2）
+│   ├── presentation/       ← PPTX 解析/HTML 渲染/Closure 构建
+│   ├── document/           ← 文档解析（markdown→Document）
+│   ├── ppteval/            ← PPTEval 评测框架
+│   ├── roles/ prompts/     ← 角色与提示词模板
+│   ├── mcp_server.py       ← pptagent-mcp（模板式幻灯片生成 MCP server）
+│   └── templates/          ← 预处理的参考模板（beamer/cip/default/hit/thu/ucas）
+│
+└── PPTea-main/             ← 评测/蒸馏实验基础设施（独立仓库，deeppresenter 是软链接）
+    └── sarl/
+        ├── evaluation/     ← 各框架生成适配器 + 两阶段评分管线
+        ├── coldstart/      ← SFT 轨迹收集与蒸馏训练
+        ├── dataset/        ← 数据集构建（typings.py 数据模型）
+        └── analysis/       ← 论文图表（帕累托/工具使用/缺陷分布）
+&lt;/code&gt;&lt;/pre&gt;&lt;hr&gt;
+&lt;h2 id=&#34;5-agent-harness-主循环详解&#34;&gt;5. Agent Harness 主循环详解&lt;/h2&gt;
+&lt;p&gt;&lt;strong&gt;Agent Harness&lt;/strong&gt;（&lt;code&gt;deeppresenter/agents/agent.py&lt;/code&gt;，462 行）是整个 DeepPresenter 的核心：一个通用的 &lt;strong&gt;think → act → observe&lt;/strong&gt; ReAct 式工具调用循环，所有具体智能体（Research/Design/PPTAgent/Planner/SubAgent）都复用这个基类。&lt;/p&gt;
+&lt;h3 id=&#34;51-通用智能体基类-agent&#34;&gt;5.1 通用智能体基类 Agent&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;初始化&lt;/strong&gt;（&lt;code&gt;agent.py:57-136&lt;/code&gt;）：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;从 &lt;code&gt;roles/&amp;lt;ClassName&amp;gt;.yaml&lt;/code&gt; 加载角色配置（&lt;code&gt;RoleConfig&lt;/code&gt;）：system prompt（分语言）、Jinja2 instruction 模板、&lt;code&gt;use_model&lt;/code&gt;（用哪个 LLM 字段）、&lt;code&gt;ToolSet&lt;/code&gt;（包含/排除哪些 MCP server 与工具）；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;self.llm = config[role_config.use_model]&lt;/code&gt;（research_agent / design_agent / long_context_model）；&lt;/li&gt;
+&lt;li&gt;记录 &lt;code&gt;context_window&lt;/code&gt;（默认 40k = CONTEXT_LENGTH_LIMIT 200k / max_context_folds 5）、&lt;code&gt;max_context_turns&lt;/code&gt;（5）、&lt;code&gt;max_turns&lt;/code&gt;（可选上限）；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;_setup_toolset()&lt;/code&gt;（&lt;code&gt;agent.py:138-155&lt;/code&gt;）从 &lt;code&gt;agent_env&lt;/code&gt; 解析工具列表（&lt;code&gt;&amp;quot;all&amp;quot;&lt;/code&gt; 展开为所有已连接 server，再减排除项），生成 OpenAI function-tool 字典列表；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;拼接系统提示词&lt;/strong&gt;：角色 system prompt + &lt;code&gt;AGENT_PROMPT&lt;/code&gt;（环境描述与工具调用规则：充分探索、并行工具调用、每轮最多 7 个工具、截断策略）+ &lt;code&gt;MA_RESEACHER_PROMPT&lt;/code&gt;/&lt;code&gt;MA_RRESENTER_PROMPT&lt;/code&gt;（多智能体委派指南）+ &lt;code&gt;OFFLINE_PROMPT&lt;/code&gt;（离线模式）+ &lt;code&gt;CONTEXT_MODE_PROMPT&lt;/code&gt;（上下文折叠模式）；&lt;/li&gt;
+&lt;li&gt;初始化 &lt;code&gt;chat_history = [SYSTEM 消息]&lt;/code&gt;。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;52-actionllm-思考与工具调用生成&#34;&gt;5.2 action：LLM 思考与工具调用生成&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;&lt;code&gt;action()&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;agent.py:191-240&lt;/code&gt;）——每一轮循环的 LLM 步骤：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;递增 &lt;code&gt;turn_count&lt;/code&gt;，执行 &lt;code&gt;max_turns&lt;/code&gt; 上限（剩余 &amp;lt;2 轮时注入 &amp;ldquo;finish now&amp;rdquo; 提示）；&lt;/li&gt;
+&lt;li&gt;首次调用时把渲染好的 Jinja2 instruction 作为 USER 消息追加；&lt;/li&gt;
+&lt;li&gt;调用 &lt;code&gt;self.llm.run(messages=self.chat_history, tools=self.tools)&lt;/code&gt; —— &lt;strong&gt;OpenAI 原生 function calling&lt;/strong&gt;；&lt;/li&gt;
+&lt;li&gt;记录 token 用量到 &lt;code&gt;self.cost&lt;/code&gt; 与 &lt;code&gt;self.context_length&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;把 assistant 消息（content + tool_calls + 可选的 reasoning）追加到历史并返回。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;53-execute工具执行与观察收集&#34;&gt;5.3 execute：工具执行与观察收集&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;&lt;code&gt;execute()&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;agent.py:250-348&lt;/code&gt;）——每一轮循环的动作步骤：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;取出 assistant 消息的 &lt;code&gt;tool_calls&lt;/code&gt;，用 JSON schema 校验参数，强制 &lt;code&gt;MAX_TOOLCALL_PER_TURN&lt;/code&gt;（默认 7）；&lt;/li&gt;
+&lt;li&gt;检测特殊工具 &lt;strong&gt;&lt;code&gt;finalize&lt;/code&gt;&lt;/strong&gt;：暂存其 &lt;code&gt;outcome&lt;/code&gt; 参数与 &lt;code&gt;finish_id&lt;/code&gt;，并注入 &lt;code&gt;agent_name&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;并行执行所有工具&lt;/strong&gt;：&lt;code&gt;asyncio.gather(self.agent_env.tool_execute(t)...)&lt;/code&gt;（&lt;code&gt;agent.py:292&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;观察归一化：含图片的结果按模型类型格式化（Gemini/Qwen 转 &lt;code&gt;role=USER&lt;/code&gt;，Claude 转 &lt;code&gt;image&lt;/code&gt;+&lt;code&gt;source.base64&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;观察追加到 &lt;code&gt;chat_history&lt;/code&gt;，错误记录到 &lt;code&gt;error_history&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;若 &lt;code&gt;finalize&lt;/code&gt; 被调用且其观察文本等于 outcome，&lt;strong&gt;返回 outcome 字符串（表示循环完成）&lt;/strong&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;上下文预算告警&lt;/strong&gt;（&lt;code&gt;agent.py:325-336&lt;/code&gt;）：context 超 50% 注入 &lt;code&gt;HALF_BUDGET_NOTICE_MSG&lt;/code&gt;，超 80% 注入 &lt;code&gt;URGENT_BUDGET_NOTICE_MSG&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;上下文溢出处理&lt;/strong&gt;（&lt;code&gt;agent.py:341-347&lt;/code&gt;）：&lt;code&gt;context_length &amp;gt; context_window&lt;/code&gt; 时，若启用折叠则 &lt;code&gt;compact_history()&lt;/code&gt;，否则抛 RuntimeError；&lt;/li&gt;
+&lt;li&gt;返回 outcome 字符串或观察 ChatMessage 列表。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;54-上下文管理与-compact_history&#34;&gt;5.4 上下文管理与 compact_history&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;&lt;code&gt;compact_history()&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;agent.py:356-401&lt;/code&gt;）——防止上下文溢出的核心机制：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;保留 &lt;code&gt;keep_head=10&lt;/code&gt; + &lt;code&gt;keep_tail=4&lt;/code&gt; 条消息，中间的折叠；&lt;/li&gt;
+&lt;li&gt;先保存完整历史（&lt;code&gt;message_only=True&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;用 &lt;code&gt;MEMORY_COMPACT_MSG&lt;/code&gt;（&lt;code&gt;constants.py:154-184&lt;/code&gt; 的详细摘要指令）配合 &lt;code&gt;self.chat_history + [summary_ask]&lt;/code&gt; 请求 LLM 总结；&lt;/li&gt;
+&lt;li&gt;LLM 的摘要消息（可能含 tool_calls）被执行；追加 &lt;code&gt;CONTINUE_MSG&lt;/code&gt;（最后折叠时 &lt;code&gt;LAST_ITER_MSG&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;重构历史为 &lt;code&gt;head + tail + [summary_ask, summary_message, *observations]&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;受 &lt;code&gt;max_context_turns&lt;/code&gt;（5 次折叠）限制。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;配套的 &lt;code&gt;_split_history()&lt;/code&gt;（&lt;code&gt;agent.py:403-421&lt;/code&gt;）保证 tool-call/tool-result 消息配对保持在 head 中，用 &lt;code&gt;HIST_LOST_MSG&lt;/code&gt; 标记截断点。&lt;/p&gt;
+&lt;h3 id=&#34;55-loop各智能体的主循环&#34;&gt;5.5 loop：各智能体的主循环&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;&lt;code&gt;loop()&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;agent.py:242-249&lt;/code&gt;）是抽象异步生成器，所有具体智能体实现它，但模式相同：&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre tabindex=&#34;0&#34; style=&#34;color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;&#34;&gt;&lt;code class=&#34;language-python&#34; data-lang=&#34;python&#34;&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;&lt;span style=&#34;color:#66d9ef&#34;&gt;while&lt;/span&gt; &lt;span style=&#34;color:#66d9ef&#34;&gt;True&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;    agent_message &lt;span style=&#34;color:#f92672&#34;&gt;=&lt;/span&gt; &lt;span style=&#34;color:#66d9ef&#34;&gt;await&lt;/span&gt; self&lt;span style=&#34;color:#f92672&#34;&gt;.&lt;/span&gt;action(&lt;span style=&#34;color:#f92672&#34;&gt;**&lt;/span&gt;kwargs)   &lt;span style=&#34;color:#75715e&#34;&gt;# 思考 + 生成工具调用&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;    &lt;span style=&#34;color:#66d9ef&#34;&gt;yield&lt;/span&gt; agent_message                           &lt;span style=&#34;color:#75715e&#34;&gt;# 流式输出进度&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;    outcome &lt;span style=&#34;color:#f92672&#34;&gt;=&lt;/span&gt; &lt;span style=&#34;color:#66d9ef&#34;&gt;await&lt;/span&gt; self&lt;span style=&#34;color:#f92672&#34;&gt;.&lt;/span&gt;execute(self&lt;span style=&#34;color:#f92672&#34;&gt;.&lt;/span&gt;chat_history[&lt;span style=&#34;color:#f92672&#34;&gt;-&lt;/span&gt;&lt;span style=&#34;color:#ae81ff&#34;&gt;1&lt;/span&gt;]&lt;span style=&#34;color:#f92672&#34;&gt;.&lt;/span&gt;tool_calls)  &lt;span style=&#34;color:#75715e&#34;&gt;# 行动 + 观察&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;    &lt;span style=&#34;color:#66d9ef&#34;&gt;if&lt;/span&gt; isinstance(outcome, list):
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;        &lt;span style=&#34;color:#66d9ef&#34;&gt;for&lt;/span&gt; item &lt;span style=&#34;color:#f92672&#34;&gt;in&lt;/span&gt; outcome:
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;            &lt;span style=&#34;color:#66d9ef&#34;&gt;yield&lt;/span&gt; item                            &lt;span style=&#34;color:#75715e&#34;&gt;# 流式输出观察&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;    &lt;span style=&#34;color:#66d9ef&#34;&gt;else&lt;/span&gt;:
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;        &lt;span style=&#34;color:#66d9ef&#34;&gt;yield&lt;/span&gt; outcome
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;        &lt;span style=&#34;color:#66d9ef&#34;&gt;break&lt;/span&gt;                                     &lt;span style=&#34;color:#75715e&#34;&gt;# finalize → 循环结束&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;这是标准的 &lt;strong&gt;ReAct 式 harness&lt;/strong&gt;：action（LLM）→ execute（工具）→ 观察 → 重复直到 &lt;code&gt;finalize&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;各具体智能体的 loop：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;Research&lt;/strong&gt;（&lt;code&gt;research.py:8-24&lt;/code&gt;）：&lt;code&gt;loop(req, outline_path)&lt;/code&gt; 跑通用循环，action 注入 deepresearch prompt + 附件 + 大纲路径；最终 finalize 返回 &lt;code&gt;.md&lt;/code&gt; 文稿路径；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Design&lt;/strong&gt;（&lt;code&gt;design.py:5-20&lt;/code&gt;）：&lt;code&gt;loop(req, markdown_file)&lt;/code&gt; 创建 &lt;code&gt;slides/&lt;/code&gt; 目录跑循环，&lt;code&gt;while True&lt;/code&gt; 收到字符串 outcome 后跳出再 yield 一次（HTML 目录）；逐页 write + inspect_slide + 修复；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;PPTAgent&lt;/strong&gt;（&lt;code&gt;pptagent.py:5-29&lt;/code&gt;）：&lt;code&gt;loop(req, markdown_file)&lt;/code&gt; 通过 &lt;code&gt;pptagent&lt;/code&gt; MCP 工具（list_templates/set_template/create_slide/write_slide/generate_slide）做模板式生成；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Planner&lt;/strong&gt;（&lt;code&gt;planner.py:8-48&lt;/code&gt;）：两阶段生成器——阶段 1 跑循环产出 outline JSON 路径；阶段 2 是&lt;strong&gt;交互式修订循环&lt;/strong&gt;（&lt;code&gt;feedback = yield outcome&lt;/code&gt;，CLI 通过 &lt;code&gt;.asend(feedback)&lt;/code&gt; 推送修订指令，非空则追加为 USER 消息重新跑循环）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;SubAgent&lt;/strong&gt;（&lt;code&gt;subagent.py:46-51&lt;/code&gt;）：通用循环，从 Context 文件读委派任务，产出 deliverable 文件后 finalize。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;hr&gt;
+&lt;h2 id=&#34;6-agent-harness-框架架构模块与角色&#34;&gt;6. Agent Harness 框架架构：模块与角色&lt;/h2&gt;
+&lt;h3 id=&#34;61-编排层-agentloopmainpy&#34;&gt;6.1 编排层 AgentLoop（main.py）&lt;/h3&gt;
+&lt;p&gt;&lt;code&gt;deeppresenter/main.py&lt;/code&gt;（233 行）是顶层编排入口，&lt;code&gt;AgentLoop.run()&lt;/code&gt; 是 async generator，逐步 yield 进度 &lt;code&gt;ChatMessage&lt;/code&gt; 与最终产物路径。管线如下：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;AgentLoop.run()
+├── 1. 设置阶段（main.py:58-84）
+│   ├── 可选校验 LLM
+│   ├── 附件复制到 workspace/attachments/（request.copy_to_workspace）
+│   ├── 写入 .input_request.json
+│   ├── 打开 AgentEnv 异步上下文
+│   └── [multiagent_mode] 注册 delegate_subagent 本地工具
+│
+├── 2. 可选 Planner 阶段（main.py:87-110）
+│   └── planner.loop(request) → outline JSON（可交互修订）
+│
+├── 3. Research 阶段（main.py:112-139）
+│   └── research_agent.loop(request, outline_path) → manuscript.md
+│
+├── 4. 生成阶段，按 convert_type 分支（main.py:141-221）
+│   ├── PPTAGENT：PPTAgent.loop(request, md_file) → .pptx
+│   └── DEEPPRESENTER：Design.loop(request, md_file) → slides/*.html
+│       └── 导出：convert_html_to_pptx()（Node html2pptx）
+│           └── 失败回退：PlaywrightConverter.convert_to_pdf → .pdf
+│
+└── 5. 收尾（main.py:222-224）
+    └── save_results() 写 intermediate_output.json（outline/manuscript/pptx/final 路径）
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;每个子阶段都 &lt;code&gt;save_history()&lt;/code&gt; / &lt;code&gt;save_results()&lt;/code&gt;（在 &lt;code&gt;finally&lt;/code&gt; 中），日志写到 &lt;code&gt;workspace/.history/deeppresenter-loop.log&lt;/code&gt;。&lt;/p&gt;
+&lt;h3 id=&#34;62-环境层-agentenv-与工具执行envpy&#34;&gt;6.2 环境层 AgentEnv 与工具执行（env.py）&lt;/h3&gt;
+&lt;p&gt;&lt;code&gt;deeppresenter/agents/env.py&lt;/code&gt;（454 行）管理 MCP server、工具注册、沙箱与异步工具执行：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;__init__&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;env.py:54-109&lt;/code&gt;）：加载 &lt;code&gt;mcp.json&lt;/code&gt; 的 &lt;code&gt;MCPServer&lt;/code&gt; 定义（离线模式跳过 network server），计算 docker-in-docker 的 &lt;code&gt;HOST_WORKSPACE&lt;/code&gt; 卷映射，构建 &lt;code&gt;envs&lt;/code&gt; 字典（WORKSPACE/HOST_WORKSPACE/WORKSPACE_ID/CONFIG_FILE/PACKAGE_DIR&amp;hellip;）传给 MCPClient，避免全局环境变量污染；注册工具注册表（&lt;code&gt;_local_tools&lt;/code&gt;/&lt;code&gt;_tools_dict&lt;/code&gt;/&lt;code&gt;_server_tools&lt;/code&gt;/&lt;code&gt;_tool_to_server&lt;/code&gt;）；&lt;code&gt;async_tool_mode&lt;/code&gt; 开启时注册 &lt;code&gt;gather&lt;/code&gt; 工具；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;__aenter__&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;env.py:228-266&lt;/code&gt;）：清理同名陈旧 docker 容器，并行连接所有 MCP server，缓存全部工具规格到 &lt;code&gt;.tools.json&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;__aexit__&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;env.py:268-300&lt;/code&gt;）：断开 server，写 &lt;code&gt;tool_history.jsonl&lt;/code&gt; 与 &lt;code&gt;tools_time_cost.json&lt;/code&gt;（工具调用的完整审计日志）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;register_tool&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;env.py:347-372&lt;/code&gt;）：把 Python 可调用对象注册为本地工具（用 FastMCP 的 typeadapter 从类型注解自动生成 JSON schema），用于 &lt;code&gt;delegate_subagent&lt;/code&gt; 与 &lt;code&gt;gather&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;tool_execute&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;env.py:111-226&lt;/code&gt;）：统一工具执行路径——jsonschema 校验参数 → &lt;code&gt;_execute_tool&lt;/code&gt; → 包装成 &lt;code&gt;ChatMessage(role=TOOL)&lt;/code&gt;。&lt;strong&gt;结果截断&lt;/strong&gt;（&lt;code&gt;env.py:186-203&lt;/code&gt;）：文本超 &lt;code&gt;TOOL_CUTOFF_LEN&lt;/code&gt;（4096 字符）在最后一个换行截断并附 &lt;code&gt;CUTOFF_WARNING&lt;/code&gt;，全文保存到本地文件供 &lt;code&gt;read_file&lt;/code&gt; 按偏移读取；图片结果转 &lt;code&gt;image_url&lt;/code&gt; 块。记录每个工具耗时/成功/失败；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;_execute_tool&lt;/code&gt;&lt;/strong&gt;（&lt;code&gt;env.py:403-423&lt;/code&gt;）异步工具模式：非白名单工具（gather/finalize/inspect_slide 除外）限时 5 秒，超时返回占位符并后台继续，智能体之后用 &lt;code&gt;gather&lt;/code&gt; 收集结果——这允许智能体&lt;strong&gt;并行执行多个长时程任务&lt;/strong&gt;。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;工具调用路径：LLM 原生 function calling → &lt;code&gt;Agent.execute&lt;/code&gt; → &lt;code&gt;agent_env.tool_execute&lt;/code&gt; → 本地 Python 可调用 或 &lt;code&gt;MCPClient.session.call_tool&lt;/code&gt;（&lt;code&gt;utils/mcp_client.py&lt;/code&gt;，stdio/SSE 子进程连接，&lt;code&gt;MCP_CALL_TIMEOUT&lt;/code&gt; 默认 1800 秒）。&lt;/p&gt;
+&lt;h3 id=&#34;63-mcp-工具服务器tools&#34;&gt;6.3 MCP 工具服务器（tools/）&lt;/h3&gt;
+&lt;p&gt;每个文件是独立的 FastMCP server（按 &lt;code&gt;mcp.json&lt;/code&gt; 以子进程启动），提供以下工具：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;Server&lt;/th&gt;
+					&lt;th&gt;类别&lt;/th&gt;
+					&lt;th&gt;工具&lt;/th&gt;
+					&lt;th&gt;说明&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;Search&lt;/code&gt;（&lt;code&gt;search.py&lt;/code&gt;）&lt;/td&gt;
+					&lt;td&gt;Retrieve&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;search_web&lt;/code&gt; / &lt;code&gt;search_images&lt;/code&gt; / &lt;code&gt;fetch_url&lt;/code&gt; / &lt;code&gt;download_file&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;SerpAPI 优先、Tavily 备选；Playwright 渲染网页 + trafilatura/markdownify 提取；图片下载校验（WEBP→PNG）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;Any2Markdown&lt;/code&gt;（&lt;code&gt;any2markdown.py&lt;/code&gt;）&lt;/td&gt;
+					&lt;td&gt;File&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;convert_to_markdown&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;PDF/DOCX 转 Markdown：MinerU（在线 API 或离线部署）或 MarkItDown；base64 图片落盘、链接改绝对路径、报告图片尺寸&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;DeepPresenter&lt;/code&gt;（&lt;code&gt;reflect.py&lt;/code&gt;）&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;Reason&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;&lt;code&gt;inspect_slide&lt;/code&gt;&lt;/strong&gt; / &lt;strong&gt;&lt;code&gt;inspect_manuscript&lt;/code&gt;&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;环境接地反思的两个观察接口（见 3.4 节）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;Task&lt;/code&gt;（&lt;code&gt;task.py&lt;/code&gt;）&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;Control&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;&lt;code&gt;finalize&lt;/code&gt;&lt;/strong&gt;&lt;/td&gt;
+					&lt;td&gt;循环终止工具，按智能体类型做最终校验（Planner 要 .json；Research 要 .md 并重写图片绝对路径+注入宽高比到 alt；PPTAgent 要有效 .pptx；Design 要 slide_*.html 目录）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;ToolAgents&lt;/code&gt;（&lt;code&gt;tool_agents.py&lt;/code&gt;）&lt;/td&gt;
+					&lt;td&gt;Create/Reason&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;image_generation&lt;/code&gt; / &lt;code&gt;image_caption&lt;/code&gt; / &lt;code&gt;document_summary&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;条件注册：配置了 t2i_model 才提供文生图；vision_model 提供图片分类+描述（Table/Chart/Logo + &amp;lt;50 词）；multiagent 模式提供长文档摘要&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;pptagent&lt;/code&gt;（&lt;code&gt;pptagent/mcp_server.py&lt;/code&gt;）&lt;/td&gt;
+					&lt;td&gt;模板生成&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;list_templates&lt;/code&gt; / &lt;code&gt;set_template&lt;/code&gt; / &lt;code&gt;create_slide&lt;/code&gt; / &lt;code&gt;write_slide&lt;/code&gt; / &lt;code&gt;generate_slide&lt;/code&gt; / &lt;code&gt;markdown_table_to_image&lt;/code&gt; / &lt;code&gt;save_generated_slides&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;旧版模板式生成，仅供 PPTAgent 智能体&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;sandbox&lt;/code&gt;（&lt;code&gt;docker/server.ts&lt;/code&gt;）&lt;/td&gt;
+					&lt;td&gt;File&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;read_file&lt;/code&gt; / &lt;code&gt;write_file&lt;/code&gt; / &lt;code&gt;move_file&lt;/code&gt; / &lt;code&gt;edit_file&lt;/code&gt; / &lt;code&gt;create_directory&lt;/code&gt; / &lt;code&gt;list_directory&lt;/code&gt; / &lt;code&gt;execute_command&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;DesktopCommanderMCP 沙箱（Docker 或本地 Node 进程），&lt;code&gt;execute_command&lt;/code&gt; 使智能体成为&amp;quot;沙箱化代码智能体&amp;rdquo;（可跑 shell/python/node/渲染 mermaid），&lt;code&gt;docker/config.json&lt;/code&gt; 屏蔽危险命令（format/mkfs/dd/useradd&amp;hellip;）&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;工具按论文 Table 8 分为五类：&lt;strong&gt;Retrieve&lt;/strong&gt;（信息获取）、&lt;strong&gt;File&lt;/strong&gt;（文档操作）、&lt;strong&gt;Reason&lt;/strong&gt;（检查与反思）、&lt;strong&gt;Control&lt;/strong&gt;（任务管理）、&lt;strong&gt;Create&lt;/strong&gt;（代码执行与资产生成）。&lt;/p&gt;
+&lt;h3 id=&#34;64-角色定义roles&#34;&gt;6.4 角色定义（roles/）&lt;/h3&gt;
+&lt;p&gt;每个角色是一个 YAML，定义 system prompt（中英）、Jinja2 instruction 模板、use_model 与 toolset：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;角色文件&lt;/th&gt;
+					&lt;th&gt;智能体&lt;/th&gt;
+					&lt;th&gt;模型&lt;/th&gt;
+					&lt;th&gt;工具集亮点&lt;/th&gt;
+					&lt;th&gt;指令要点&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;Research.yaml&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;Research&lt;/td&gt;
+					&lt;td&gt;research_agent&lt;/td&gt;
+					&lt;td&gt;除 pptagent 外所有 server；排除 inspect_slide&lt;/td&gt;
+					&lt;td&gt;深度调研（广→窄）、信息美学、Markdown 文稿（&lt;code&gt;---&lt;/code&gt; 分页、图片本地化）、inspect_manuscript、finalize 返回 .md&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;Design.yaml&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;Design&lt;/td&gt;
+					&lt;td&gt;design_agent（多模态）&lt;/td&gt;
+					&lt;td&gt;sandbox + delegate_subagent + inspect_slide + finalize&lt;/td&gt;
+					&lt;td&gt;HTML/CSS 固定版式设计、global.css、逐页生成 + inspect_slide 质量检查、按宽高比固定 body 尺寸&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;PPTAgent.yaml&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;PPTAgent&lt;/td&gt;
+					&lt;td&gt;research_agent&lt;/td&gt;
+					&lt;td&gt;pptagent + sandbox + finalize&lt;/td&gt;
+					&lt;td&gt;从 Markdown 做模板式生成、表格转图片、finalize 返回 .pptx&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;Planner.yaml&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;Planner&lt;/td&gt;
+					&lt;td&gt;research_agent&lt;/td&gt;
+					&lt;td&gt;除 tool_agents/deeppresenter 外所有；排除 search_images&lt;/td&gt;
+					&lt;td&gt;设计 JSON 大纲 &lt;code&gt;{&amp;quot;slides&amp;quot;:[{index,title,context}]}&lt;/code&gt;、finalize 返回 .json&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;SubAgent.yaml&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;SubAgent&lt;/td&gt;
+					&lt;td&gt;design_agent&lt;/td&gt;
+					&lt;td&gt;除 pptagent 外所有；排除 delegate_subagent（禁递归）&lt;/td&gt;
+					&lt;td&gt;从 Context 文件完成单个委派子任务、产出自包含 deliverable、finalize&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;附加动态提示词片段（&lt;code&gt;utils/constants.py&lt;/code&gt;）：&lt;code&gt;AGENT_PROMPT&lt;/code&gt;（环境描述+工具调用规则）、&lt;code&gt;MA_RESEACHER_PROMPT&lt;/code&gt;/&lt;code&gt;MA_RRESENTER_PROMPT&lt;/code&gt;（多智能体并行委派指南）、&lt;code&gt;OFFLINE_PROMPT&lt;/code&gt;、&lt;code&gt;CONTEXT_MODE_PROMPT&lt;/code&gt;、上下文预算告警与 &lt;code&gt;MEMORY_COMPACT_MSG&lt;/code&gt;。&lt;/p&gt;
+&lt;h3 id=&#34;65-配置与常量utils&#34;&gt;6.5 配置与常量（utils/）&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;utils/config.py&lt;/code&gt;&lt;/strong&gt;：&lt;code&gt;Endpoint&lt;/code&gt;（单端点，路由 litellm 或 AsyncOpenAI，支持 tool-calling/结构化输出/纯对话）、&lt;code&gt;LLM&lt;/code&gt;（多端点交替重试 + 并发信号量 + 多模态自动检测 + &lt;code&gt;generate_image&lt;/code&gt; + &lt;code&gt;validate()&lt;/code&gt;）、&lt;code&gt;DeepPresenterConfig&lt;/code&gt;（&lt;code&gt;multiagent_mode&lt;/code&gt;/&lt;code&gt;offline_mode&lt;/code&gt;/&lt;code&gt;async_tool_mode&lt;/code&gt;/&lt;code&gt;context_folding&lt;/code&gt;/&lt;code&gt;context_window&lt;/code&gt;/&lt;code&gt;max_context_folds&lt;/code&gt;/&lt;code&gt;heavy_reflect&lt;/code&gt; + 三个 LLM 字段）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;utils/typings.py&lt;/code&gt;&lt;/strong&gt;：&lt;code&gt;Role&lt;/code&gt;（SYSTEM/USER/ASSISTANT/TOOL）、&lt;code&gt;ChatMessage&lt;/code&gt;（统一消息模型，content 归一为 &lt;code&gt;{type:text/image_url}&lt;/code&gt; 块列表）、&lt;code&gt;ToolSet&lt;/code&gt;/&lt;code&gt;RoleConfig&lt;/code&gt;、&lt;code&gt;Cost&lt;/code&gt;、&lt;code&gt;ConvertType&lt;/code&gt;（DEEPPRESENTER/PPTAGENT）、&lt;code&gt;PowerPointType&lt;/code&gt;（16:9/4:3/A1-A4）、&lt;code&gt;InputRequest&lt;/code&gt;（instruction/attachments/num_pages/template/powerpoint_type/convert_type/enable_planner/extra_info，&lt;code&gt;copy_to_workspace&lt;/code&gt; 复制附件）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;utils/constants.py&lt;/code&gt;&lt;/strong&gt;：全部可调常量（&lt;code&gt;WORKSPACE_BASE&lt;/code&gt;、&lt;code&gt;TOOL_CUTOFF_LEN=4096&lt;/code&gt;、&lt;code&gt;MAX_TOOLCALL_PER_TURN=7&lt;/code&gt;、&lt;code&gt;MAX_SUBAGENT_TURNS=10&lt;/code&gt;、&lt;code&gt;CONTEXT_LENGTH_LIMIT=200k&lt;/code&gt;、&lt;code&gt;MCP_CALL_TIMEOUT=1800s&lt;/code&gt;、&lt;code&gt;PIXEL_MULTIPLE=16&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;utils/webview.py&lt;/code&gt;&lt;/strong&gt;：&lt;code&gt;PlaywrightConverter&lt;/code&gt;（共享 headless Chromium，HTML→按宽高比分页 PDF→pdf2image 栅格化为 slide_NN.jpg）与 &lt;code&gt;convert_html_to_pptx&lt;/code&gt;（调 Node &lt;code&gt;html2pptx_cli.js&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;utils/mineru_api.py&lt;/code&gt;&lt;/strong&gt;：MinerU PDF 解析（在线 mineru.net API 或离线自部署端点）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;66-沙箱与-htmlpptx-转换&#34;&gt;6.6 沙箱与 HTML→PPTX 转换&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;沙箱&lt;/strong&gt;：DesktopCommanderMCP 的 Docker 镜像（&lt;code&gt;docker/SandBox.Dockerfile&lt;/code&gt;）或集群本地模式（&lt;code&gt;run_sandbox_local.sh&lt;/code&gt;，SLURM 无 Docker 环境下用本地 Node 进程），提供通用代码执行能力；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;HTML→PPTX&lt;/strong&gt;（&lt;code&gt;html2pptx/&lt;/code&gt;）：Node CLI 用 pptxgenjs + 自定义 &lt;code&gt;html2pptx.js&lt;/code&gt; 转换器，支持 16:9/4:3/A1-A4 布局、&lt;code&gt;--validate&lt;/code&gt;/&lt;code&gt;--soft&lt;/code&gt; 选项，依赖 playwright 与 sharp；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;配置示例&lt;/strong&gt;：&lt;code&gt;config.yaml.example&lt;/code&gt;（LLM 块 + 模式开关）、&lt;code&gt;mcp.json.example&lt;/code&gt;（7 个 MCP server，&lt;code&gt;$VAR&lt;/code&gt; 占位符由 &lt;code&gt;MCPServer._process_escape&lt;/code&gt; 从 AgentEnv.envs 解析）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;67-完整端到端流程图&#34;&gt;6.7 完整端到端流程图&lt;/h3&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;pptagent generate &amp;#34;主题&amp;#34; -f 附件.pdf --planner
+  └─ CLI commands.generate → AgentLoop(config, request)
+       └─ AgentLoop.run()
+            ├─ AgentEnv.__aenter__：并行连接 7 个 MCP server，缓存工具规格
+            ├─ [enable_planner] Planner.loop：action/execute 循环 → outline.json → finalize
+            │     └─ CLI 交互式修订（_edit_outline：Rich 表格展示，y 批准或自然语言修订）
+            ├─ Research.loop：action → [search_web, fetch_url, convert_to_markdown,
+            │     image_generation...] → execute（并行、4096 字符截断）→ 观察
+            │     → inspect_manuscript → finalize(manuscript.md)
+            │     [context &amp;gt;40k 触发 compact_history 摘要折叠]
+            ├─ convert_type 分支：
+            │   ├─ PPTAGENT：PPTAgent.loop → list_templates → set_template
+            │   │     → create_slide → write_slide → generate_slide → finalize(.pptx)
+            │   └─ DEEPPRESENTER：Design.loop
+            │         → read manuscript → write global.css
+            │         → [逐页] write slide_NN.html → inspect_slide（渲染+校验；
+            │            heavy_reflect 时多模态智能体&amp;#34;看到&amp;#34;渲染 JPEG 并修复）
+            │         → finalize(slides/)  [多智能体：delegate_subagent 并行生成]
+            └─ 导出：convert_html_to_pptx(slides/, out.pptx, 宽高比, soft)
+                  └─ node html2pptx_cli.js → pptxgenjs → .pptx
+                  [失败回退：PlaywrightConverter.convert_to_pdf → .pdf]
+&lt;/code&gt;&lt;/pre&gt;&lt;hr&gt;
+&lt;h2 id=&#34;7-pptea-main评测与蒸馏实验基础设施&#34;&gt;7. PPTea-main：评测与蒸馏实验基础设施&lt;/h2&gt;
+&lt;h3 id=&#34;71-pptea-main-是什么&#34;&gt;7.1 PPTea-main 是什么&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;PPTea-main 不是独立产品，而是 DeepPresenter 项目的实验/评测/蒸馏基础设施&lt;/strong&gt;：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;deeppresenter/&lt;/code&gt; 是指向 &lt;code&gt;../PPTAgent/deeppresenter&lt;/code&gt; 的&lt;strong&gt;软链接&lt;/strong&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;sarl/&lt;/code&gt; 包（0.1.0，docstring &amp;ldquo;SARL Package&amp;rdquo;）大量 import &lt;code&gt;deeppresenter.*&lt;/code&gt; 与 &lt;code&gt;pptagent.*&lt;/code&gt;；&lt;/li&gt;
+&lt;li&gt;它实现了 project-demand.md 描述的完整闭环：&lt;strong&gt;各 Agent Harness 生成 → Workspace 对齐 → PPTEval 评分 → 分析 → 轨迹蒸馏&lt;/strong&gt;。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;72-评测流程两阶段评分管线&#34;&gt;7.2 评测流程（两阶段评分管线）&lt;/h3&gt;
+&lt;p&gt;&lt;code&gt;PPTea-main/sarl/evaluation/&lt;/code&gt; 提供各竞争框架的&lt;strong&gt;生成适配器&lt;/strong&gt;：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;文件&lt;/th&gt;
+					&lt;th&gt;框架&lt;/th&gt;
+					&lt;th&gt;机制&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter_gen.py&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;DeepPresenter&lt;/td&gt;
+					&lt;td&gt;调 &lt;code&gt;deeppresenter.main.AgentLoop.run()&lt;/code&gt;，写 &lt;code&gt;.datapoint.json&lt;/code&gt; 后立即 &lt;code&gt;score_workspace()&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;codex_gen.py&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;Codex CLI（GPT-5）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;codex exec --sandbox danger-full-access&lt;/code&gt; + &lt;code&gt;pptx-generator&lt;/code&gt; Skill（&lt;code&gt;../Deeppresenter-skills/skills/pptx-generator&lt;/code&gt;），&lt;code&gt;verify_workspace_ready()&lt;/code&gt; 校验 PPTea 兼容别名&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;pptagent_gen.py&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;PPTAgent（旧基线）&lt;/td&gt;
+					&lt;td&gt;包装 &lt;code&gt;pptagent.pptgen.PPTAgent&lt;/code&gt;，模板归纳生成，soffice 转 PDF&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;gamma.py&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;Gamma（商业）&lt;/td&gt;
+					&lt;td&gt;Gamma 公开 REST API，轮询完成后下载 PDF&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;&lt;code&gt;kctv.py&lt;/code&gt;&lt;/td&gt;
+					&lt;td&gt;KCTV（基线）&lt;/td&gt;
+					&lt;td&gt;两步 LLM：提取结构化 JSON → LaTeX，xelatex 渲染 PDF&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;&lt;strong&gt;Phase 1 —— Content &amp;amp; Style 评分&lt;/strong&gt;（&lt;code&gt;score_exp.py&lt;/code&gt; → &lt;code&gt;score_workspace()&lt;/code&gt;）：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;读 &lt;code&gt;.datapoint.json&lt;/code&gt; 与 &lt;code&gt;intermediate_output.json&lt;/code&gt; 找最终 PDF；&lt;/li&gt;
+&lt;li&gt;定位幻灯片图片目录 &lt;code&gt;.slide_images-pdf-{stem}/slide_XX.jpg&lt;/code&gt;（&lt;strong&gt;所有框架的评测输入统一归一化为这个格式&lt;/strong&gt;）；&lt;/li&gt;
+&lt;li&gt;校验 PPTea 文稿别名 &lt;code&gt;.slides.md&lt;/code&gt;（必须等于 &lt;code&gt;manuscript.md&lt;/code&gt;）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;确定性约束检查&lt;/strong&gt;：&lt;code&gt;dp.verify()&lt;/code&gt; 用 PyPDF 查页数、mediabox 查宽高比、fasttext LID 查语言 → 0-1 分 ×5；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;逐页 VLM 评分&lt;/strong&gt;（8 并发，GPT-5 多模态 judge）：
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;content_descriptor&lt;/code&gt; 描述内容 → &lt;code&gt;text_scorer&lt;/code&gt; 打 Content 分；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;style_descriptor&lt;/code&gt; 描述风格 → &lt;code&gt;vision_scorer&lt;/code&gt; 打 Style 分；&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;写 &lt;code&gt;slide_evals.json&lt;/code&gt;（逐页）与 &lt;code&gt;evals.json&lt;/code&gt;（平均：constraint/content/style）。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;strong&gt;Phase 2 —— 约束 VLM 评测&lt;/strong&gt;（&lt;code&gt;score_exp_complex.py&lt;/code&gt; → &lt;code&gt;score_workspace_constraints()&lt;/code&gt;）：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;仅对通过 Phase 1 阈值的 workspace 运行（默认 min_content=3.5 / min_style=3.5 / min_constraint=1.0）；&lt;/li&gt;
+&lt;li&gt;对 DataPoint 中的每个 &lt;code&gt;Constraint&lt;/code&gt;（STYLE 类评估所有页，其余评估指定页），用 &lt;code&gt;prompt/judge_constraints.txt&lt;/code&gt; VLM judge 判定 satisfied(1.0)/partially(0.5)/not(0.0)；&lt;/li&gt;
+&lt;li&gt;写 &lt;code&gt;constraint_evals.json&lt;/code&gt;，更新 &lt;code&gt;evals.json&lt;/code&gt; 的 &lt;code&gt;constraint_vlm&lt;/code&gt;。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;strong&gt;辅助评测设施&lt;/strong&gt;：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;divesity.py&lt;/code&gt;：DINOv2 特征 + Vendi Score 的幻灯片风格多样性指标（0-1）；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;plot_score_dist.py&lt;/code&gt;：分数分布直方图（确定过滤阈值）；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;review_server.py&lt;/code&gt;：FastAPI 人工审核面板（8080 端口，缩略图+分数网格、逐 workspace 审核、reasonable/partially/unreasonable 三档判定）；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;finish_codex_benchmark.py&lt;/code&gt;：Codex workspace 的确定性终结器（校验语义产物存在、重跑 pptxgen html validate/render + convert + package，验证 PPTea 别名；&lt;strong&gt;明确拒绝合成内容&lt;/strong&gt;，只做确定性渲染/转换/打包）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;73-数据模型与-workspace-对齐&#34;&gt;7.3 数据模型与 Workspace 对齐&lt;/h3&gt;
+&lt;p&gt;核心数据模型（&lt;code&gt;sarl/dataset/typings.py&lt;/code&gt;）：&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre tabindex=&#34;0&#34; style=&#34;color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;&#34;&gt;&lt;code class=&#34;language-python&#34; data-lang=&#34;python&#34;&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;DataPoint:  &lt;span style=&#34;color:#75715e&#34;&gt;# 一个评测任务&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  prompt: str            &lt;span style=&#34;color:#75715e&#34;&gt;# 用户指令&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  language: &lt;span style=&#34;color:#e6db74&#34;&gt;&amp;#34;zh&amp;#34;&lt;/span&gt;&lt;span style=&#34;color:#f92672&#34;&gt;|&lt;/span&gt;&lt;span style=&#34;color:#e6db74&#34;&gt;&amp;#34;en&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  source: &lt;span style=&#34;color:#e6db74&#34;&gt;&amp;#34;arXiv&amp;#34;&lt;/span&gt;&lt;span style=&#34;color:#f92672&#34;&gt;|&lt;/span&gt;&lt;span style=&#34;color:#e6db74&#34;&gt;&amp;#34;finepdfs&amp;#34;&lt;/span&gt;&lt;span style=&#34;color:#f92672&#34;&gt;|&lt;/span&gt;&lt;span style=&#34;color:#e6db74&#34;&gt;&amp;#34;personahub&amp;#34;&lt;/span&gt;&lt;span style=&#34;color:#f92672&#34;&gt;|...&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  aspect_ratio: PowerPointType   &lt;span style=&#34;color:#75715e&#34;&gt;# 16:9 | 4:3 | A1&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  page_low, page_high: int       &lt;span style=&#34;color:#75715e&#34;&gt;# 页数约束&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  attachments: list[str]         &lt;span style=&#34;color:#75715e&#34;&gt;# 附件路径&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  constraints: list[Constraint]  &lt;span style=&#34;color:#75715e&#34;&gt;# 结构约束（STYLE/COVER/AGENDA/VISUAL_CHART/...）&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span style=&#34;display:flex;&#34;&gt;&lt;span&gt;  task_id: str                   &lt;span style=&#34;color:#75715e&#34;&gt;# md5(prompt+attachments)[:8]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;&lt;strong&gt;Workspace 对齐协议&lt;/strong&gt;（所有框架必须产出）：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;workspace/{task_id}/
+  .datapoint.json            # 输入任务
+  .slides.md                 # == manuscript.md（PPTea 文稿别名）
+  manuscript.md              # 完整幻灯片文稿
+  slide_manifest.json        # 幻灯片结构清单
+  design-system.json         # 品牌/排版配置
+  slides/global.css + slide_01.html...  # HTML 幻灯片源码
+  renders/html/ slide_01.png + renders/pptx/ slide_01.png   # 渲染截图
+  .slide_images-pdf-{stem}/slide_XX.jpg   # 评测图片（评分唯一输入）
+  delivery/ presentation.pptx + presentation.pdf + source.zip  # 最终交付
+  intermediate_output.json / run.json / qa/ / evals.json / slide_evals.json / constraint_evals.json
+&lt;/code&gt;&lt;/pre&gt;&lt;h3 id=&#34;74-轨迹蒸馏与冷启动&#34;&gt;7.4 轨迹蒸馏与冷启动&lt;/h3&gt;
+&lt;p&gt;&lt;code&gt;sarl/coldstart/&lt;/code&gt; 实现 SFT 蒸馏管线（把大模型 DeepPresenter 蒸馏为 Qwen3-VL-4B）：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;trajectory_collect.py&lt;/code&gt;&lt;/strong&gt;：把完成的 DeepPresenter workspace 转成 SFT 轨迹，应用质量过滤（&lt;code&gt;constraint==1.0, content&amp;gt;=3.9, style&amp;gt;=3.9, constraint_vlm&amp;gt;=0.65&lt;/code&gt;），过滤重复输出、消息去重、注入合成 &lt;code&gt;thinking&lt;/code&gt; 工具，导出 &lt;code&gt;data/stage1/trajectories_*.json&lt;/code&gt;——&lt;strong&gt;评测分数闭环回到训练数据筛选&lt;/strong&gt;；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;coldstart.sh&lt;/code&gt;&lt;/strong&gt;：Megatron SFT 训练 Qwen3-VL-4B-Instruct（4 GPU、TP=4、56K 上下文、3 epochs、lr 1e-5）；&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;&lt;code&gt;process_oversight.py&lt;/code&gt;&lt;/strong&gt;：外在验证/过程监督——VLM critic（&lt;code&gt;vl_oversight&lt;/code&gt;）审查 Design Agent 的 HTML 幻灯片的版面/渲染/风格问题（severity 0-3）+ &lt;code&gt;agent_watch&lt;/code&gt; 幻觉检测 + &lt;code&gt;critic_follow&lt;/code&gt; 计划遵循检查（论文 3.2 节 extrinsic verification 的实现）；&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;sarl/analysis/efficiency.py&lt;/code&gt;：成本-性能帕累托图（论文 Figure 6 数据）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;hr&gt;
+&lt;h2 id=&#34;8-与直接让-codex-生成-ppt-的对比&#34;&gt;8. 与直接让 CodeX 生成 PPT 的对比&lt;/h2&gt;
+&lt;h3 id=&#34;81-直接-codex-方式的做法&#34;&gt;8.1 直接 CodeX 方式的做法&lt;/h3&gt;
+&lt;p&gt;&amp;ldquo;直接让 CodeX 生成 PPT，给他参考图附件&amp;quot;的做法是：把任务提示 + 参考图片作为附件给 CodeX，让它用通用编码能力（python-pptx / html / marp 等）直接写代码生成 PPTX。在我们的评测中，对应 &lt;code&gt;codex_gen.py&lt;/code&gt;：&lt;code&gt;codex exec --sandbox danger-full-access&lt;/code&gt; + &lt;code&gt;pptx-generator&lt;/code&gt; Skill（把 DeepPresenter 流程蒸馏为 Codex 可用的 Skill 文档 + 确定性脚本）。&lt;/p&gt;
+&lt;h3 id=&#34;82-本质区别一research-与-design-的解耦&#34;&gt;8.2 本质区别一：Research 与 Design 的解耦&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;DeepPresenter&lt;/strong&gt;：两个专职智能体、两段轨迹、一个共享文件系统。&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Researcher 用意图自适应策略做&lt;strong&gt;多步检索综合&lt;/strong&gt;（web/图片/论文/附件解析），产出结构化文稿 M（页面/主题/证据/资产绑定）；&lt;/li&gt;
+&lt;li&gt;Presenter 在独立轨迹中基于 M 做&lt;strong&gt;内容驱动的视觉设计&lt;/strong&gt;，每页 inspect 修复。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;strong&gt;直接 CodeX&lt;/strong&gt;：单一 agent 用统一上下文同时承担调研与设计。问题：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;调研深度受上下文窗口限制，长文档/多主题调研容易浅尝辄止；&lt;/li&gt;
+&lt;li&gt;&amp;ldquo;调研&amp;quot;与&amp;quot;设计&amp;quot;互相抢占 token 预算，设计阶段上下文已接近极限（对应 DeepPresenter 论文统计的 32.3% 环境错误：上下文溢出）；&lt;/li&gt;
+&lt;li&gt;附件证据使用浅层：实测（&lt;code&gt;experiment-codex-vs-deeppresenter-finalcheck-20260813.md&lt;/code&gt;）中 Codex 对 14 页试卷附件只做&amp;quot;题目级裁剪+通用标题+两条短要点&amp;rdquo;，而 DeepPresenter 把 955 行 Markdown 解析成概念级教学图（station model、seismogram S-P timing、subduction quakes&amp;hellip;），3-4 条因果要点 + 与论点直接绑定的可读图。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;83-本质区别二环境接地反思-vs-内省反思&#34;&gt;8.3 本质区别二：环境接地反思 vs 内省反思&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;DeepPresenter&lt;/strong&gt; 的 &lt;code&gt;inspect_slide&lt;/code&gt; 把 HTML 渲染成像素图交给多模态智能体&amp;quot;亲眼看&amp;rdquo;，&lt;code&gt;inspect_manuscript&lt;/code&gt; 给结构化诊断（页数/语言/资源缺失）。反思条件是&lt;strong&gt;渲染后的感知状态&lt;/strong&gt;，与用户看到的一致，能发现：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;后渲染缺陷（元素溢出、重叠、低对比度、断裂图片）；&lt;/li&gt;
+&lt;li&gt;图片路径前缀缺失（论文 Figure 2 例子：&amp;ldquo;fig1.jpg&amp;rdquo; missing &amp;ldquo;images/&amp;rdquo; prefix）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;strong&gt;直接 CodeX&lt;/strong&gt; 的反思大多是内省式的：看自己的代码和中间文本（HTML/代码），&amp;ldquo;我觉得没问题&amp;rdquo;。问题：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;自验证偏差（self-verification bias）：在自己的轨迹状态内评判自己的输出；&lt;/li&gt;
+&lt;li&gt;代码级合法（HTML 语法正确、布局坐标在界内）≠ 渲染级正确（溢出/重叠/可读性）；&lt;/li&gt;
+&lt;li&gt;实测中 Codex 的 QA 检查聚焦路径/可读性/转换成功，&lt;strong&gt;抓不到核心内容失败&lt;/strong&gt;：&amp;ldquo;这个视觉真的支撑了本页论点吗？&amp;rdquo;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;84-本质区别三受控工具生态-vs-通用编码环境&#34;&gt;8.4 本质区别三：受控工具生态 vs 通用编码环境&lt;/h3&gt;
+&lt;p&gt;&lt;strong&gt;DeepPresenter&lt;/strong&gt; 提供 5 类 20+ 个受控 MCP 工具：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Retrieve（search_web/images/papers、fetch_url、document_analyze、image_caption）；&lt;/li&gt;
+&lt;li&gt;File（convert_to_markdown、read/write/move/edit/download_file、execute_command、目录管理）；&lt;/li&gt;
+&lt;li&gt;Reason（thinking、inspect_slide、inspect_manuscript）；&lt;/li&gt;
+&lt;li&gt;Control（todo_create/update/list、finalize）；&lt;/li&gt;
+&lt;li&gt;Create（image_generation）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;工具的&lt;strong&gt;语义边界明确&lt;/strong&gt;（如 &lt;code&gt;search_web&lt;/code&gt; 封装了检索+结果归一化）、&lt;strong&gt;有校验&lt;/strong&gt;（&lt;code&gt;finalize&lt;/code&gt; 按角色校验产物、&lt;code&gt;download_file&lt;/code&gt; 校验图片格式与路径、工具输出 4096 字符截断+全文落盘）、&lt;strong&gt;有审计&lt;/strong&gt;（tool_history.jsonl、tools_time_cost.json）、&lt;strong&gt;有沙箱&lt;/strong&gt;（危险命令黑名单）。&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;直接 CodeX&lt;/strong&gt; 只有一个通用 sandbox + 文件系统 + shell。能力等价但缺少：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;语义化的检索工具（检索质量依赖模型自己拼 URL/API）；&lt;/li&gt;
+&lt;li&gt;专门的渲染观察接口（没有 inspect，只能靠写脚本截图再读，或干脆不检查）；&lt;/li&gt;
+&lt;li&gt;按角色约束的终止校验（finalize 的产物类型验证）；&lt;/li&gt;
+&lt;li&gt;上下文管理（工具截断、压缩折叠、预算告警）。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;85-本质区别四评测闭环&#34;&gt;8.5 本质区别四：评测闭环&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;PPTAgent/DeepPresenter 自带评测框架（PPTEval / Constraint+Content+Style+Diversity），评测分数驱动实验迭代；&lt;/li&gt;
+&lt;li&gt;本项目的蒸馏管线（&lt;code&gt;trajectory_collect.py&lt;/code&gt;）把&lt;strong&gt;评测分数作为 SFT 轨迹过滤阈值&lt;/strong&gt;（constraint==1.0、content&amp;gt;=3.9、style&amp;gt;=3.9、constraint_vlm&amp;gt;=0.65），形成&amp;quot;评测→过滤→训练→再评测&amp;quot;闭环；&lt;/li&gt;
+&lt;li&gt;Codex 方式是通用 agent，没有与演示文稿语义绑定的评测反馈回路。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;86-实测对比数据&#34;&gt;8.6 实测对比数据&lt;/h3&gt;
+&lt;p&gt;12 样本实测（&lt;code&gt;codex-skill-ppt-additional-analysis*.md&lt;/code&gt;）：&lt;/p&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;维度&lt;/th&gt;
+					&lt;th&gt;Codex+Skill&lt;/th&gt;
+					&lt;th&gt;DeepPresenter&lt;/th&gt;
+					&lt;th&gt;差距&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;Content&lt;/td&gt;
+					&lt;td&gt;2.62&lt;/td&gt;
+					&lt;td&gt;4.33&lt;/td&gt;
+					&lt;td&gt;&lt;strong&gt;主要差距&lt;/strong&gt;（受众改写、证据选择、有意义的视觉）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;Style&lt;/td&gt;
+					&lt;td&gt;3.96&lt;/td&gt;
+					&lt;td&gt;4.45&lt;/td&gt;
+					&lt;td&gt;较小（页数/渲染/基本布局已不是瓶颈）&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;单样本细看（&lt;code&gt;07bbf73b&lt;/code&gt;，14 页附件 deck）：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Codex 逐页 Content：&lt;code&gt;4,3,3,2,2,3,2,2,2,2,2,2,2,3&lt;/code&gt;——中段大面积 2/5 塌陷；&lt;/li&gt;
+&lt;li&gt;DeepPresenter 逐页 Content：&lt;code&gt;3,3,3,3,3,4,5,5,5,4,5,5,4,3&lt;/code&gt;——多数页 4-5/5；&lt;/li&gt;
+&lt;li&gt;Codex 页级样式 Style 4.0（结构有效、视觉一致），但&amp;quot;每页一个 PDF 裁剪图 + 通用证据标题 + 两条短要点&amp;rdquo;，视觉被评价为&amp;quot;小、难读、与页主题弱相关甚至离题&amp;rdquo;；&lt;/li&gt;
+&lt;li&gt;单页 A1 海报任务（&lt;code&gt;c5cae881&lt;/code&gt;）两者打平（4.0/4.0/1.0）——因为单页合成任务无多页证据路由问题，Skill 足以匹配。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;strong&gt;结论&lt;/strong&gt;：直接 CodeX（即使配上 Skill）在&amp;quot;多页、附件密集、需要把附件内容转成教学产物&amp;quot;的任务上，与 DeepPresenter 的核心差距在&lt;strong&gt;语义内容质量&lt;/strong&gt;（证据提取、论点-证据绑定、视觉信息增益），而非确定性约束或转换稳定性。&lt;/p&gt;
+&lt;hr&gt;
+&lt;h2 id=&#34;9-从论文到代码的对应关系速查表&#34;&gt;9. 从论文到代码的对应关系速查表&lt;/h2&gt;
+&lt;table&gt;
+	&lt;thead&gt;
+			&lt;tr&gt;
+					&lt;th&gt;论文概念&lt;/th&gt;
+					&lt;th&gt;代码位置&lt;/th&gt;
+			&lt;/tr&gt;
+	&lt;/thead&gt;
+	&lt;tbody&gt;
+			&lt;tr&gt;
+					&lt;td&gt;PPTAgent Stage I 幻灯片分类&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/induct.py:95-110&lt;/code&gt;（category_split，&lt;code&gt;prompts/category_split.txt&lt;/code&gt;）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;PPTAgent Stage I 版面聚类&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/induct.py:112-151&lt;/code&gt; + &lt;code&gt;model_utils.py:291-345&lt;/code&gt;（get_cluster，sim_bound=0.65）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;PPTAgent Stage I Schema 提取&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/induct.py:175-208&lt;/code&gt;（content_induct）+ &lt;code&gt;presentation/layout.py&lt;/code&gt;（Element/Layout）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;PPTAgent Stage II 大纲生成&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/pptgen.py:239-318&lt;/code&gt;（generate_outline + _add_functional_layouts）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;PPTAgent Stage II 版面选择/内容生成&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptgen.py:434-467&lt;/code&gt; / &lt;code&gt;469-491&lt;/code&gt;（_select_layout / _generate_content）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;编辑 API&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/apis.py&lt;/code&gt;（replace_paragraph/replace_image/del_paragraph/del_image/clone_paragraph）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;自校正 REPL&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptgen.py:493-529&lt;/code&gt;（_edit_slide）+ &lt;code&gt;apis.py:127-203&lt;/code&gt;（execute_actions）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;HTML 渲染（CodeRender）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/presentation/presentation.py:193-216&lt;/code&gt;（SlidePage.to_html）+ &lt;code&gt;shapes.py&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;Closure 延迟构建&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/presentation/shapes.py:218-246&lt;/code&gt;（Closure）+ &lt;code&gt;presentation.py:122-144&lt;/code&gt;（build）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;PPTEval&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/ppteval/ppteval.py&lt;/code&gt; + &lt;code&gt;prompts/ppteval/*.txt&lt;/code&gt;（三维度 prompt）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;多样性指标&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;pptagent/ppteval/divesity.py&lt;/code&gt;（Vendi Score）+ &lt;code&gt;sarl/evaluation/divesity.py&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;Agent Harness 主循环&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/agents/agent.py&lt;/code&gt;（action:191-240 / execute:250-348 / compact_history:356-401 / loop:242-249）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;AgentLoop 编排&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/main.py:43-224&lt;/code&gt;（run）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;AgentEnv 与工具执行&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/agents/env.py&lt;/code&gt;（tool_execute:111-226 / register_tool:347-372）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;MCP 客户端&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/utils/mcp_client.py&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;inspect_slide / inspect_manuscript&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/tools/reflect.py:28-62 / 66-117&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;finalize 终止校验&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/tools/task.py:58-111&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;角色定义&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/roles/*.yaml&lt;/code&gt; + &lt;code&gt;utils/constants.py&lt;/code&gt;（动态提示词片段）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;上下文折叠&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;agent.py:356-401&lt;/code&gt;（compact_history）+ &lt;code&gt;constants.py:154-184&lt;/code&gt;（MEMORY_COMPACT_MSG）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;多智能体并行&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/agents/subagent.py&lt;/code&gt;（delegate_subagent）+ &lt;code&gt;main.py:74-78&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;HTML→PPTX&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/utils/webview.py:169-233&lt;/code&gt; + &lt;code&gt;html2pptx/html2pptx_cli.js&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;沙箱&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;deeppresenter/docker/server.ts&lt;/code&gt;（DesktopCommanderMCP）+ &lt;code&gt;run_sandbox_local.sh&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;外在验证（extrinsic verification）&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;PPTea-main/sarl/coldstart/process_oversight.py&lt;/code&gt;（vl_oversight/agent_watch/critic_follow）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;轨迹过滤/蒸馏&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;sarl/coldstart/trajectory_collect.py&lt;/code&gt; + &lt;code&gt;coldstart.sh&lt;/code&gt;（Qwen3-VL-4B SFT）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;评测两阶段管线&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;sarl/evaluation/score_exp.py&lt;/code&gt;（Phase 1）+ &lt;code&gt;score_exp_complex.py&lt;/code&gt;（Phase 2）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;约束验证&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;sarl/dataset/typings.py&lt;/code&gt;（DataPoint.verify）+ &lt;code&gt;prompt/judge_constraints.txt&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;人工审核&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;sarl/evaluation/review_server.py&lt;/code&gt;（FastAPI）&lt;/td&gt;
+			&lt;/tr&gt;
+			&lt;tr&gt;
+					&lt;td&gt;Codex 基线&lt;/td&gt;
+					&lt;td&gt;&lt;code&gt;sarl/evaluation/codex_gen.py&lt;/code&gt; + &lt;code&gt;../Deeppresenter-skills/skills/pptx-generator&lt;/code&gt;&lt;/td&gt;
+			&lt;/tr&gt;
+	&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;hr&gt;
+&lt;h2 id=&#34;10-总结与启示&#34;&gt;10. 总结与启示&lt;/h2&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;两代系统的演进主线&lt;/strong&gt;：PPTAgent（2025）证明&amp;quot;编辑式生成 + 参考模板&amp;quot;能大幅超越纯摘要式生成，但受限于依赖参考演示文稿与固定工作流；DeepPresenter（2026）转向&amp;quot;双智能体 + 自由式生成 + 环境接地反思&amp;quot;，把生成从&amp;quot;模板填充&amp;quot;解放为&amp;quot;内容驱动的自主设计与修正&amp;quot;，并进一步用外在验证合成轨迹蒸馏出 9B 小模型。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;Agent Harness 的本质&lt;/strong&gt;：一个带上下文管理的 think-act-observe 工具调用循环（&lt;code&gt;Agent.action → execute → 观察 → 直到 finalize&lt;/code&gt;），配上&lt;strong&gt;角色化提示词、MCP 工具生态、沙箱执行、上下文折叠、多智能体委派&lt;/strong&gt;，就构成了 DeepPresenter 的通用智能体框架——这套框架不限于 PPT 生成，可复用于任意&amp;quot;长时程、工具密集、需要迭代反思&amp;quot;的任务。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;与直接 CodeX 的差距不在&amp;quot;有没有 agent&amp;quot;，而在&amp;quot;agent 的观察与反思是否接地&amp;quot;&lt;/strong&gt;：DeepPresenter 的 &lt;code&gt;inspect&lt;/code&gt; 让智能体&amp;quot;亲眼看到&amp;quot;渲染产物，Researcher/Presenter 解耦让每段轨迹专注且上下文充足，受控工具 + finalize 校验让长时程执行可审计。这些正是直接 CodeX（哪怕配上 Skill）难以在通用环境中复现的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;对本项目的意义&lt;/strong&gt;（&lt;code&gt;project-demand.md&lt;/code&gt;）：把 DeepPresenter/PPTAgent 流程蒸馏为 &lt;code&gt;pptx-generator&lt;/code&gt; Skill 供 Codex/CC 使用，本质上是在&amp;quot;通用 Agent Harness（Codex）&amp;ldquo;里重建 DeepPresenter 的关键机制：Workspace 对齐（&lt;code&gt;.slides.md&lt;/code&gt;/&lt;code&gt;.slide_images-pdf-*&lt;/code&gt; 归一化）、确定性管道（research/html/qa/convert/package）、评测对齐（pptx-evaluator + GPT-5）。实测表明机械对齐已达标（页数/渲染/打包），剩余差距集中在&lt;strong&gt;附件语义化与证据绑定&lt;/strong&gt;——这正是 DeepPresenter 论文里 Researcher 环节（意图自适应检索 + 结构化文稿）与&amp;quot;证据有信息增益&amp;quot;评估准则的体现，也是下一步迭代（topic map、证据绑定 QA、对象级 PDF 裁剪）应聚焦的方向。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;</description>
+    </item>
+    
+  </channel>
+</rss>

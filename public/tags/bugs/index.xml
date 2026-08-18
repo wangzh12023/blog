@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Bugs on WZH 的博客</title>
+    <link>http://localhost:1313/tags/bugs/</link>
+    <description>Recent content in Bugs on WZH 的博客 created by </description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>zh</language>
+    <managingEditor>wzh</managingEditor>
+    <webMaster>wzh</webMaster>
+    <copyright>2026 WZH All rights reserved</copyright>
+    <lastBuildDate>Thu, 22 Aug 2024 00:00:00 +0000</lastBuildDate><atom:link href="http://localhost:1313/tags/bugs/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>由一个 docker search 产生的连锁反应</title>
+      <link>http://localhost:1313/blog/docker-search-chain-reaction/</link>
+      <pubDate>Thu, 22 Aug 2024 00:00:00 +0000</pubDate>
+      <author>wzh</author>
+      <guid>http://localhost:1313/blog/docker-search-chain-reaction/</guid>
+      <description>&lt;p&gt;有时候菜的想发颠。&lt;/p&gt;
+&lt;p&gt;网络问题总是层出不穷，dns解析不了，docker无法拉取镜像源&amp;hellip;&lt;/p&gt;
+&lt;p&gt;莫名其妙的改了VMware的虚拟网络设置和Ubuntu的Ip&amp;amp;DNS。结果一顿操作给干连不了网了，&lt;code&gt;docker search &amp;lt;&amp;gt;&lt;/code&gt; 显示：&lt;/p&gt;
+&lt;p&gt;&lt;code&gt;Error response from daemon: Get &amp;quot;https://index.docker.io/v1/search?q=nginx&amp;amp;n=25&amp;quot;: dial tcp: lookup index.docker.io on 8.8.4.4:53: read udp 192.168.1.11:37017-&amp;gt;8.8.4.4:53: i/o timeout&lt;/code&gt;&lt;/p&gt;
+&lt;p&gt;查询后发现需要配置镜像源：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;vim /etc/docker/darmon.json
+{
+     &amp;#34;registry-mirrors&amp;#34;:[
+                &amp;#34;...&amp;#34;
+        ]
+}
+
+# 重启一下
+systemctl daemon-reloa
+systemctl restart docker
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;经配置镜像源后问题似乎得到了&amp;hellip;似乎产生了新的问题。
+&lt;code&gt;ping bing.com&lt;/code&gt; 显示&lt;code&gt;ping: bing.com: Temporary failure in name resolution&lt;/code&gt;，经过查询是DNS解析问题，先通过&lt;code&gt;vim /etc/resolv.conf&lt;/code&gt;配置了两个DNS：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;nameserver 8.8.8.8 
+nameserver 8.8.4.4
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;嘿，结果不行。由于昨夜头脑比较混乱，第二天打开虚拟网络设置-&amp;gt;for i in all network: delete-&amp;gt;应用-&amp;gt;还原默认设置-&amp;gt;重新配置虚拟机的网络为&amp;quot;桥接&amp;quot;，参考&lt;a href=&#34;https://stackoverflow.com/questions/53687051/linux-command-line-error-message-temporary-failure-in-name-resolution&#34;&gt;stackoverflow&lt;/a&gt;，将answer中的DNS部分替换为上面的dns，结果成功ping成功，并且成功search到docker镜像，但是问题就像趵突泉的泉水一样，一直涌现，在&lt;code&gt;docker pull &amp;lt;&amp;gt;&lt;/code&gt;拉取镜像的时候又提示超时：&lt;/p&gt;
+&lt;pre tabindex=&#34;0&#34;&gt;&lt;code&gt;error pulling image configuration: download failed after attempts=6: dial tcp &amp;lt;...&amp;gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;这是为什么呢？明明可以&lt;code&gt;search&lt;/code&gt; 却不能&lt;code&gt;pull&lt;/code&gt;??能&lt;code&gt;search&lt;/code&gt;说明是能够连接到docker hub的，但是pull的时候超时又说明访问有问题，经过排查后，借鉴&lt;a href=&#34;https://www.cnblogs.com/lxzcloud/p/18354640&#34;&gt;这篇博客&lt;/a&gt; 后，发现最终还是镜像源问题，更改镜像源后问题解决。&lt;/p&gt;</description>
+    </item>
+    
+  </channel>
+</rss>
