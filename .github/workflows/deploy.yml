@@ -1,4 +1,4 @@
-name: Deploy Next.js site to GitHub Pages
+name: Deploy Hugo site to GitHub Pages
 
 on:
   push:
@@ -21,22 +21,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+      - name: Setup Hugo
+        uses: peaceiris/actions-hugo@v3
         with:
-          node-version: "22"
-          cache: npm
+          hugo-version: "0.165.0"
+          extended: true
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build static site
-        run: npm run build
+      - name: Build
+        run: hugo --minify --baseURL https://wangzh12023.github.io/blog/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: ./out
+          path: ./public
 
   deploy:
     environment:

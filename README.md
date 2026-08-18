@@ -1,29 +1,35 @@
-# WZH Blog
+# Zihan Wang's Blog
 
-基于 Next.js 的静态个人博客，部署在 GitHub Pages：
-
-https://wangzh12023.github.io/blog/
+个人博客，基于 [Hugo](https://gohugo.io/) 与 [hugo-theme-ladder](https://github.com/guangzhengli/hugo-theme-ladder) 构建，通过 GitHub Actions 自动部署到 GitHub Pages。
 
 ## 本地开发
 
 ```bash
-npm install
-npm run dev
+hugo server -D
 ```
 
-访问 http://localhost:3000/blog/。
+访问 http://localhost:1313/
 
-## 构建
+## 写作
 
-```bash
-npm run build
+在 `content/blog/`（文章）或 `content/art/`（随笔）下新建 Markdown 文件，front matter 示例：
+
+```markdown
+---
+title: "文章标题"
+date: 2026-08-18
+tags: ["tag1", "tag2"]
+---
+
+正文内容...
 ```
 
-静态站点输出到 `out/`。推送到 `main` 后，GitHub Actions 会自动部署到 GitHub Pages。
+## 部署
 
-## Hugo 归档
+推送到 `main` 分支后，GitHub Actions 会自动构建并部署到：
 
-迁移前的 Hugo 版本保存在：
+https://wangzh12023.github.io/blog/
 
-- Git 分支：`hugo-archive`
-- 本地 worktree：`../blog-hugo`
+## 评论系统
+
+文章评论使用 Giscus（基于 GitHub Discussions），配置在 `config.yml` 的 `params.comments.giscus`。
