@@ -18,6 +18,9 @@ markup:
         delimiters:
           block: [['$$', '$$']]
           inline: [['$', '$']]
+  tableOfContents:
+    startLevel: 1
+    endLevel: 3
 Author:
   name: "wzh"
   email: ""
@@ -27,7 +30,7 @@ params:
   author: wzh
   authorDescription: 记录技术学习、工具分享与个人思考
   info: 一个分享技术文章、效率工具与个人见解的博客
-  favicon: images/avatar.png
+  favicon: images/avatar-eyes.png
   mainSections:
     - blog
     - art

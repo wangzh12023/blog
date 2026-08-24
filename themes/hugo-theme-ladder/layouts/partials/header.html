@@ -1,4 +1,5 @@
-<nav class="navigation">
+{{- $isContentArticle := and .IsPage (in (slice "blog" "art") .Section) -}}
+<nav class="navigation{{ if $isContentArticle }} navigation--blog-article{{ end }}">
     <section class="container">
         <a class="navigation-brand" href="{{ .Site.BaseURL | relLangURL }}">
             {{ .Site.Params.brand }}

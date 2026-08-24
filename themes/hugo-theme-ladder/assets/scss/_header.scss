@@ -6,6 +6,10 @@
   padding-left: 2rem;
   padding-right: 2rem;
 
+  &.navigation--blog-article {
+    animation: navigation-expand 0.5s ease-in-out forwards;
+  }
+
   a,
   span {
     display: inline;
@@ -193,5 +197,22 @@
         color: $alt-fg-color;
       }
     }
+  }
+}
+
+@keyframes navigation-expand {
+  from {
+    max-width: 80rem;
+  }
+
+  to {
+    max-width: 112rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navigation.navigation--blog-article {
+    animation: none;
+    max-width: 112rem;
   }
 }
