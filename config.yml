@@ -28,12 +28,11 @@ params:
   brand: HOME
   avatarURL: images/avatar-eyes.png
   author: wzh
-  authorDescription: 记录技术学习、工具分享与个人思考
-  info: 一个分享技术文章、效率工具与个人见解的博客
+  authorDescription: 记录技术学习、研究与工具实践
+  info: 分享经过整理的技术文章、研究笔记与工具实践
   favicon: images/avatar-eyes.png
   mainSections:
     - blog
-    - art
   options:
     showDarkMode: true
     enableImgZooming: true
@@ -71,8 +70,8 @@ menu:
     - name: 文章
       url: /blog
       weight: 1
-    - name: 随笔
-      url: /art
+    - name: 生活记录
+      url: https://wangzh12023.github.io/life-log/blog/
       weight: 2
     - name: 分类
       url: /tags

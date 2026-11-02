@@ -2,6 +2,8 @@
 
 个人博客，基于 [Hugo](https://gohugo.io/) 与 [hugo-theme-ladder](https://github.com/guangzhengli/hugo-theme-ladder) 构建，通过 GitHub Actions 自动部署到 GitHub Pages。
 
+这里存放经过整理的技术文章、研究笔记与工具实践。生活、日记和随笔写在 [life-log](https://wangzh12023.github.io/life-log/blog/)。
+
 ## 本地开发
 
 ```bash
@@ -12,7 +14,7 @@ hugo server -D
 
 ## 写作
 
-在 `content/blog/`（文章）或 `content/art/`（随笔）下新建 Markdown 文件，front matter 示例：
+在 `content/blog/` 下新建 Markdown 文件，front matter 示例：
 
 ```markdown
 ---
