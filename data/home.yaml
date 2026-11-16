@@ -1,24 +1,27 @@
-# Replace these platform URLs with personal profile links when they are ready.
-# GitHub and RSS already point to this blog; the email address is a placeholder.
+# Homepage social links (display order).
+# RSS resolves to the site feed via layouts/partials/home/profile.html.
 social:
-  - name: 小红书
-    icon: xiaohongshu
-    url: https://www.xiaohongshu.com/
-  - name: 知乎
-    icon: zhihu
-    url: https://www.zhihu.com/
   - name: GitHub
     icon: github
-    url: https://github.com/wangzh12023/blog
+    url: https://github.com/wangzh12023
+  - name: Email
+    icon: mail
+    url: mailto:wangzh12023@shanghaitech.edu.cn
+  - name: 知乎
+    icon: zhihu
+    url: https://www.zhihu.com/people/hui-17-6-78
+  - name: 小红书
+    icon: xiaohongshu
+    url: https://www.xiaohongshu.com/user/profile/6503dab30000000016039f95
+  - name: 抖音
+    icon: douyin
+    url: https://www.douyin.com/user/MS4wLjABAAAAixCuH8OZYnIc7Hzd4cFY0CtaelblcTthHDaiJ_zZw48
+  - name: Bilibili
+    icon: bilibili
+    url: https://space.bilibili.com/455440626
+  - name: X
+    icon: x
+    url: https://x.com/how2na
   - name: RSS
     icon: rss
     url: /index.xml
-  - name: Email
-    icon: mail
-    url: mailto:hello@example.com
-  - name: 抖音
-    icon: douyin
-    url: https://www.douyin.com/
-  - name: X
-    icon: x
-    url: https://x.com/
