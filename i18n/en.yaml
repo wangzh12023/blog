@@ -1,0 +1,36 @@
+home_headline:
+  other: "Stay curious. Keep a record."
+home_social_label:
+  other: "Find me elsewhere"
+home_navigation:
+  other: "Explore the site"
+home_read_posts:
+  other: "Read the blog"
+home_archive:
+  other: "Archive"
+home_scroll_hint:
+  other: "Scroll to read"
+nav_posts:
+  other: "Articles"
+nav_tags:
+  other: "Tags"
+nav_archive:
+  other: "Archive"
+toggle_theme:
+  other: "Toggle light or dark mode"
+toc_title:
+  other: "On this page"
+previous_page:
+  other: "Previous page"
+next_page:
+  other: "Next page"
+back_to_top:
+  other: "Back to top"
+footer_blog:
+  other: "Zihan Wang’s Blog"
+footer_powered_by:
+  other: "Powered by"
+copy_code:
+  other: "Copy"
+code_copied:
+  other: "Copied"

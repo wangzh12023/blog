@@ -1,16 +1,17 @@
 {{- $page := .page -}}
 {{- $variant := .variant -}}
 {{- $toc := $page.TableOfContents -}}
+{{- $toc = replace $toc `id="TableOfContents"` (printf `id="TableOfContents-%s" aria-label="本章目录"` $variant) | safeHTML -}}
 {{- if strings.Contains $toc "<li>" -}}
   {{- if eq $variant "mobile" -}}
   <details class="chapter-toc chapter-toc--mobile">
     <summary>本章目录</summary>
-    {{ $toc }}
+    <div class="chapter-toc__body">{{ $toc }}</div>
   </details>
   {{- else -}}
   <aside class="chapter-toc chapter-toc--desktop" aria-label="本章目录">
     <h2 class="chapter-toc__title">本章目录</h2>
-    {{ $toc }}
+    <div class="chapter-toc__scroll"><div class="chapter-toc__body">{{ $toc }}</div></div>
   </aside>
   {{- end -}}
 {{- end -}}

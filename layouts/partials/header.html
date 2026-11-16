@@ -1,0 +1,60 @@
+{{- $isContentArticle := and .IsPage (in (slice "blog" "art") .Section) -}}
+<nav class="navigation{{ if $isContentArticle }} navigation--blog-article{{ end }}">
+    <section class="container">
+        <a class="navigation-brand" href="{{ .Site.Home.RelPermalink }}">
+            {{ .Site.Params.brand }}
+        </a>
+            {{ if and .Site.Params.options.enableMultiLang hugo.IsMultilingual -}}
+            {{ range .Translations -}}
+            <div class="navigation-language">
+                <a class="navigation-link language-switch" href="{{ .RelPermalink }}" lang="{{ .Language.Lang }}" hreflang="{{ .Language.Lang }}" aria-label="{{ if eq .Language.Lang "en" }}Switch to English{{ else }}切换为中文{{ end }}" title="{{ if eq .Language.Lang "en" }}English{{ else }}中文{{ end }}">
+                    {{ partial "icons/languages.svg" . }}
+                    <span>{{ if eq .Language.Lang "en" }}EN{{ else }}中{{ end }}</span>
+                </a>
+            </div>
+            {{ end -}}
+            {{ end -}}
+        <input type="checkbox" id="menu-toggle" />
+        <label class="menu-button float-right" for="menu-toggle" aria-label="{{ if eq .Language.Lang "en" }}Toggle navigation{{ else }}展开或收起导航{{ end }}">
+            <span></span><span></span><span></span>
+        </label>
+        {{ if .Site.Menus.main }}
+        <ul class="navigation-list" id="navigation-list">
+            {{ with .Site.Menus.main}}
+            {{ range sort . }}
+            <li class="navigation-item navigation-menu">
+                {{- $labelKey := printf "nav_%s" .Identifier -}}
+                {{- $label := i18n $labelKey | default .Name -}}
+                {{- $url := .URL -}}
+                {{- with .Page }}{{ $url = .RelPermalink }}{{ end -}}
+                <a class="navigation-link" href="{{ $url }}">{{ $label }}</a>
+            </li>
+            {{ end }}
+            {{ end }}
+
+            <li class="navigation-item menu-separator">
+                <span>|</span>
+            </li>
+
+            {{ with .Site.Params.social}}
+            {{ range sort . }}
+            <li class="navigation-item navigation-social">
+                <a class="navigation-link" href="{{ .url | relURL }}" aria-label="{{ .name }}">{{ .pre | safeHTML }}</a>
+            </li>
+            {{ end }}
+            {{ end }}
+
+            {{ if .Site.Params.options.showDarkMode -}}
+            <li class="navigation-item navigation-dark">
+                <button id="mode" type="button" aria-label="{{ i18n "toggle_theme" }}">
+                    <span class="toggle-dark"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-moon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg></span>
+                    <span class="toggle-light"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sun"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg></span>
+                </button>
+            </li>
+
+            {{ end -}}
+
+        </ul>
+        {{ end }}
+    </section>
+</nav>

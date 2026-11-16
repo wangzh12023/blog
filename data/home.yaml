@@ -1,0 +1,24 @@
+# Replace these platform URLs with personal profile links when they are ready.
+# GitHub and RSS already point to this blog; the email address is a placeholder.
+social:
+  - name: 小红书
+    icon: xiaohongshu
+    url: https://www.xiaohongshu.com/
+  - name: 知乎
+    icon: zhihu
+    url: https://www.zhihu.com/
+  - name: GitHub
+    icon: github
+    url: https://github.com/wangzh12023/blog
+  - name: RSS
+    icon: rss
+    url: /index.xml
+  - name: Email
+    icon: mail
+    url: mailto:hello@example.com
+  - name: 抖音
+    icon: douyin
+    url: https://www.douyin.com/
+  - name: X
+    icon: x
+    url: https://x.com/

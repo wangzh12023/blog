@@ -1,0 +1,8 @@
+{{- if .IsHome -}}
+  {{- $styles := resources.Get "css/home-typewriter.css" | minify | fingerprint -}}
+  <link rel="stylesheet" href="{{ $styles.RelPermalink }}" integrity="{{ $styles.Data.Integrity }}" crossorigin="anonymous">
+  {{- $vendor := resources.Get "js/vendor/typed.umd.js" -}}
+  {{- $home := resources.Get "js/home-typewriter.js" -}}
+  {{- $script := slice $vendor $home | resources.Concat "js/home-typewriter.js" | minify | fingerprint -}}
+  <script src="{{ $script.RelPermalink }}" integrity="{{ $script.Data.Integrity }}" crossorigin="anonymous" defer></script>
+{{- end -}}

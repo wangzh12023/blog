@@ -1,0 +1,45 @@
+<div class="home home--landing">
+  <section class="home-landing" id="welcome" aria-labelledby="home-title">
+    <div class="home-landing__profile">
+      {{ with .Site.Params.avatarURL }}
+      <img class="home-landing__avatar" src="{{ . | relURL }}" alt="{{ $.Site.Params.author }}" width="220" height="220" fetchpriority="high">
+      {{ end }}
+      {{ $headline := i18n "home_headline" | default "Stay curious. Keep a record." }}
+      <h1 id="home-title" class="home-title" aria-label="{{ $headline }}">
+        <span class="home-title__measure" aria-hidden="true">{{ $headline }}</span>
+        <span class="home-title__animated" aria-hidden="true"><span data-home-typewriter></span></span>
+      </h1>
+      <div class="home-landing__intro" lang="en">
+        <p>Hello, I’m Zihan Wang.</p>
+        <p>A place for my technical notes and research records.</p>
+      </div>
+      <nav class="home-social" aria-label="{{ i18n "home_social_label" | default "在这些地方找到我" }}">
+        {{ range hugo.Data.home.social }}
+          {{ $iconURL := printf "images/social/%s.svg" .icon | relURL }}
+          {{ $url := .url }}
+          {{ if eq .icon "rss" }}
+            {{ with $.Site.Home.OutputFormats.Get "RSS" }}{{ $url = .RelPermalink }}{{ end }}
+          {{ else if hasPrefix $url "/" }}
+            {{ $url = strings.TrimPrefix "/" $url | relLangURL }}
+          {{ end }}
+          <a href="{{ $url }}" aria-label="{{ .name }}" title="{{ .name }}"{{ if hasPrefix .url "https://" }} target="_blank" rel="noopener noreferrer"{{ end }}>
+            <span class="home-social__icon home-social__icon--{{ .icon }}" style="{{ printf "--social-icon: url('%s')" $iconURL | safeCSS }}" aria-hidden="true"></span>
+          </a>
+        {{ end }}
+      </nav>
+      <nav class="home-landing__links" aria-label="{{ i18n "home_navigation" | default "浏览网站" }}">
+        <a href="{{ "blog/" | relLangURL }}">{{ i18n "home_read_posts" | default "阅读文章" }}</a>
+        <a href="{{ "archives/" | relLangURL }}">{{ i18n "home_archive" | default "Archive" }}</a>
+      </nav>
+    </div>
+    <a class="home-landing__scroll" href="#featured">
+      <span>{{ i18n "home_scroll_hint" | default "向下阅读" }}</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 4v15m-6-6 6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+  </section>
+  <section class="home-reading" id="featured" aria-label="{{ i18n "featured_posts" }}">
+    <div class="featured">
+      {{ partial "home/featured.html" . }}
+    </div>
+  </section>
+</div>

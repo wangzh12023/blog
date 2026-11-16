@@ -1,0 +1,36 @@
+home_headline:
+  other: "Stay curious. Keep a record."
+home_social_label:
+  other: "在这些地方找到我"
+home_navigation:
+  other: "浏览网站"
+home_read_posts:
+  other: "阅读文章"
+home_archive:
+  other: "Archive"
+home_scroll_hint:
+  other: "向下阅读"
+nav_posts:
+  other: "文章"
+nav_tags:
+  other: "分类"
+nav_archive:
+  other: "Archive"
+toggle_theme:
+  other: "切换浅色或深色模式"
+toc_title:
+  other: "本章目录"
+previous_page:
+  other: "上一页"
+next_page:
+  other: "下一页"
+back_to_top:
+  other: "返回顶部"
+footer_blog:
+  other: "Zihan Wang’s Blog"
+footer_powered_by:
+  other: "Powered by"
+copy_code:
+  other: "复制"
+code_copied:
+  other: "已复制"

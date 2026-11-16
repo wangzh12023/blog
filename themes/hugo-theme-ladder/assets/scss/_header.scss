@@ -216,3 +216,101 @@
     max-width: 112rem;
   }
 }
+
+// Keep the language control in the same quiet, outlined icon family.
+.navigation > .container > .navigation-language {
+  float: right;
+  margin-left: 0.8rem;
+}
+.navigation .navigation-language .language-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.2rem 0 0.2rem 1rem;
+  min-height: 2.8rem;
+  vertical-align: middle;
+
+  svg {
+    width: 2rem;
+    height: 2rem;
+    flex: none;
+  }
+
+  span {
+    padding: 0;
+    font-size: 1.25rem;
+    font-weight: 500;
+    line-height: 1;
+  }
+
+  &:focus-visible {
+    outline: 1px solid currentColor;
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+}
+
+@media only screen and (max-width: 768px) {
+  .navigation .navigation-language .language-switch {
+    justify-content: center;
+    min-height: 2.8rem;
+    padding: 0 0 0 1rem;
+  }
+}
+
+// Align navigation controls by their boxes, rather than SVG baselines.
+.navigation {
+  > .container {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .navigation-brand { float: none; padding: 0; margin-right: auto; }
+  .navigation-list {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    float: none;
+    padding: 0;
+    order: 2;
+    .navigation-item { float: none; padding: 0; }
+    .navigation-menu .navigation-link { display: flex; align-items: center; min-height: 4rem; padding: 0 0.6rem; }
+    .navigation-social .navigation-link, .navigation-dark button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 4rem;
+      height: 4rem;
+      margin: 0;
+      padding: 0;
+      color: inherit;
+      line-height: 1;
+    }
+    .navigation-dark span { padding: 0; line-height: 1; }
+    .navigation-social svg, .navigation-dark svg { display: block; width: 2rem; height: 2rem; }
+    .menu-separator { padding: 0 0.4rem; margin: 0; opacity: 0.4; }
+  }
+  > .container > .navigation-language { display: flex; float: none; order: 3; margin: 0; }
+  .navigation-language .language-switch { min-height: 4rem; padding: 0 1rem; }
+  .menu-button { order: 4; }
+}
+@media only screen and (max-width: 768px) {
+  .navigation {
+    .navigation-list {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      order: 5;
+      flex-basis: 100%;
+      gap: 0.8rem 0.4rem;
+      top: 0;
+      overflow: hidden;
+      .navigation-menu { flex-basis: 100%; }
+      .navigation-menu .navigation-link { justify-content: center; }
+    }
+    .menu-button { margin: 0 0 0 0.4rem; cursor: pointer; }
+    .navigation-language .language-switch { padding: 0 0.4rem; }
+    #menu-toggle:checked + label + ul { padding: 1rem 0; }
+  }
+}

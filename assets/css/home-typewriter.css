@@ -1,0 +1,46 @@
+.home--landing .home-landing h1.home-title {
+  display: grid;
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+.home-title__measure,
+.home-title__animated {
+  grid-area: 1 / 1;
+}
+
+.home-title__animated { display: none; }
+
+/* Reserve the complete heading, including its responsive line wrapping. */
+.home-title__measure::after,
+.home-title__animated::after {
+  content: "";
+  display: inline-block;
+  height: 0.78em;
+  margin-left: 0.08em;
+  border-left: 1px solid transparent;
+  vertical-align: -0.02em;
+}
+
+.home-title.is-typing .home-title__measure { visibility: hidden; }
+.home-title.is-typing .home-title__animated { display: block; }
+.home-title.is-typing .home-title__animated::after {
+  border-color: currentColor;
+  animation: home-title-caret 900ms step-end infinite;
+}
+
+.home-title.is-complete .home-title__animated::after {
+  border-color: transparent;
+  animation: none;
+}
+
+@keyframes home-title-caret {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-title.is-typing .home-title__measure { visibility: visible; }
+  .home-title.is-typing .home-title__animated { display: none; }
+}

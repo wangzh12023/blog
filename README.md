@@ -12,7 +12,7 @@ hugo server -D
 
 ## 写作
 
-在 `content/blog/`（文章）或 `content/art/`（随笔）下新建 Markdown 文件，front matter 示例：
+在 `content/blog/` 下新建技术文章 Markdown 文件，front matter 示例：
 
 ```markdown
 ---
